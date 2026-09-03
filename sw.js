@@ -1,4 +1,4 @@
-const CACHE = 'beltcall-v1';
+const CACHE = 'beltcall-v2';
 const ASSETS = [
   './', './index.html', './app.js', './manifest.webmanifest',
   'https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js'
