@@ -158,7 +158,6 @@ function go(name){
   $('subtitle').textContent = call ? (call.customer + (call.site?' - '+call.site:'')) : 'No call open';
   const inCall = call && ['dash','belt','project','note','health','compile'].includes(name);
   $('bar').style.display = inCall ? 'flex' : 'none';
-  $('barPhoto').style.display = (call && call.entries.length) ? 'block' : 'none';
   window.scrollTo(0,0);
   if(name==='dash') renderDash();
   if(name==='compile') renderCompileStat();
@@ -333,14 +332,30 @@ function renderDash(){
     if(e.type==='project'){ head='Project - '+e.project; body=[e.status,e.next,e.target].filter(Boolean).join(' &middot; '); }
     if(e.type==='note'){ head='Note - '+e.topic; body=esc(e.text); }
     if(e.type==='health'){ head='Health - '+(e.asset||'unspecified'); body=[e.fault,e.severity].filter(Boolean).join(' &middot; '); }
-    const th = (e.photos||[]).map(p=>'<img src="'+p+'">').join('');
+    const ph = e.photos||[];
+    const th = ph.map((p,j)=>'<img src="'+p+'" data-rm="'+i+':'+j+'">').join('');
     return '<div class="card"><div class="hd"><span class="t">'+esc(head)+'</span>'+
       '<button class="x" data-del="'+i+'">Remove</button></div>'+
       '<p class="meta">'+body+'</p>'+
-      (th?'<div class="thumbs">'+th+'</div>':'')+'</div>';
+      (th?'<div class="thumbs">'+th+'</div>':'')+
+      '<div class="cardbar"><button data-cam="'+i+'">Camera</button>'+
+      '<button data-gal="'+i+'">Photos</button>'+
+      '<span class="phc">'+(ph.length? ph.length+' photo'+(ph.length===1?'':'s') : 'no photos')+'</span></div></div>';
   }).join('');
   el.querySelectorAll('[data-del]').forEach(b=>b.addEventListener('click', async ()=>{
+    if(!confirm('Remove this entry and its photos?')) return;
     call.entries.splice(+b.dataset.del,1); await saveCall(); renderDash();
+  }));
+  el.querySelectorAll('[data-cam]').forEach(b=>b.addEventListener('click', ()=>{
+    photoTarget = +b.dataset.cam; $('camInput').value=''; $('camInput').click();
+  }));
+  el.querySelectorAll('[data-gal]').forEach(b=>b.addEventListener('click', ()=>{
+    photoTarget = +b.dataset.gal; $('galInput').value=''; $('galInput').click();
+  }));
+  el.querySelectorAll('[data-rm]').forEach(img=>img.addEventListener('click', async ()=>{
+    const p = img.dataset.rm.split(':').map(Number);
+    if(!confirm('Remove this photo?')) return;
+    call.entries[p[0]].photos.splice(p[1],1); await saveCall(); renderDash();
   }));
 }
 $('closeCall').addEventListener('click', async ()=>{
@@ -424,21 +439,29 @@ $('hSave').addEventListener('click', async ()=>{
 });
 
 /* ---------- photos ---------- */
-$('barPhoto').addEventListener('click', ()=>{ $('photoInput').value=''; $('photoInput').click(); });
-$('photoInput').addEventListener('change', async e => {
-  const files = [...e.target.files];
-  if(!files.length || !call || !call.entries.length) return;
-  const entry = call.entries[call.entries.length-1];
+$('barCamera').addEventListener('click', ()=>{ photoTarget=null; $('camInput').value=''; $('camInput').click(); });
+$('barGallery').addEventListener('click', ()=>{ photoTarget=null; $('galInput').value=''; $('galInput').click(); });
+
+async function addPhotos(files){
+  if(!files.length || !call || !call.entries.length){ photoTarget=null; return; }
+  const idx = (photoTarget!=null && call.entries[photoTarget]) ? photoTarget : call.entries.length-1;
+  photoTarget = null;
+  const entry = call.entries[idx];
+  entry.photos = entry.photos || [];
+  let ok = 0;
   for(const f of files){
-    const d = await shrink(f);
-    entry.photos = entry.photos || [];
-    entry.photos.push(d);
+    try { entry.photos.push(await shrink(f)); ok++; }
+    catch(err){ console.error('skipped', f.name, err); }
   }
   await saveCall();
   const label = entry.asset || entry.project || entry.topic || 'entry';
-  toast(files.length+' photo'+(files.length>1?'s':'')+' held against '+label);
+  const n = entry.photos.length;
+  toast(ok===1 ? ('Photo '+n+' held against '+label)
+               : (ok+' photos held against '+label+' ('+n+' total)'));
   if(screen==='dash') renderDash();
-});
+}
+$('camInput').addEventListener('change', e => addPhotos([...e.target.files]));
+$('galInput').addEventListener('change', e => addPhotos([...e.target.files]));
 function shrink(file, max=1400, q=0.72){
   return new Promise((res,rej)=>{
     const img = new Image(), url = URL.createObjectURL(file);
