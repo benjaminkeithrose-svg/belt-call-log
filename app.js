@@ -2,42 +2,58 @@
    State lives in IndexedDB. Nothing leaves the phone unless shared. */
 
 const DB_NAME = 'beltcall', DB_VER = 1;
-let db, DATA = null, call = null, screen = 'home', photoTarget = null;
+let db, dbReady = null, DATA = null, call = null, screen = 'home', photoTarget = null;
 
 /* ---------- storage ---------- */
 function openDB(){
-  return new Promise((res, rej) => {
-    const r = indexedDB.open(DB_NAME, DB_VER);
+  if(dbReady) return dbReady;
+  dbReady = new Promise((res, rej) => {
+    let r;
+    try { r = indexedDB.open(DB_NAME, DB_VER); }
+    catch(e){ rej(new Error('this browser is blocking local storage')); return; }
     r.onupgradeneeded = e => {
       const d = e.target.result;
       if(!d.objectStoreNames.contains('kv')) d.createObjectStore('kv');
       if(!d.objectStoreNames.contains('calls')) d.createObjectStore('calls', {keyPath:'id'});
     };
     r.onsuccess = e => { db = e.target.result; res(db); };
-    r.onerror = () => rej(r.error);
+    r.onerror = () => rej(r.error || new Error('the database would not open'));
+    r.onblocked = () => rej(new Error('another copy of this app is open - close it and reopen'));
   });
+  dbReady.catch(() => { dbReady = null; });   // let the next attempt try again
+  return dbReady;
 }
-function kvGet(k){
+async function ready(){
+  if(db) return db;
+  await openDB();
+  if(!db) throw new Error('local storage unavailable');
+  return db;
+}
+async function kvGet(k){
+  const d = await ready();
   return new Promise((res,rej)=>{
-    const t = db.transaction('kv','readonly').objectStore('kv').get(k);
+    const t = d.transaction('kv','readonly').objectStore('kv').get(k);
     t.onsuccess = ()=>res(t.result); t.onerror = ()=>rej(t.error);
   });
 }
-function kvSet(k,v){
+async function kvSet(k,v){
+  const d = await ready();
   return new Promise((res,rej)=>{
-    const t = db.transaction('kv','readwrite').objectStore('kv').put(v,k);
+    const t = d.transaction('kv','readwrite').objectStore('kv').put(v,k);
     t.onsuccess = ()=>res(); t.onerror = ()=>rej(t.error);
   });
 }
-function callsPut(c){
+async function callsPut(c){
+  const d = await ready();
   return new Promise((res,rej)=>{
-    const t = db.transaction('calls','readwrite').objectStore('calls').put(c);
+    const t = d.transaction('calls','readwrite').objectStore('calls').put(c);
     t.onsuccess = ()=>res(); t.onerror = ()=>rej(t.error);
   });
 }
-function callsAll(){
+async function callsAll(){
+  const d = await ready();
   return new Promise((res,rej)=>{
-    const t = db.transaction('calls','readonly').objectStore('calls').getAll();
+    const t = d.transaction('calls','readonly').objectStore('calls').getAll();
     t.onsuccess = ()=>res(t.result||[]); t.onerror = ()=>rej(t.error);
   });
 }
@@ -593,12 +609,19 @@ function download(html){
 
 /* ---------- boot ---------- */
 (async function(){
-  await openDB();
-  DATA = await kvGet('data');
+  let dbErr = null;
+  try {
+    await openDB();
+    DATA = await kvGet('data');
+  } catch(e){ dbErr = e; console.error('storage', e); }
   renderDbStat(); fillManagers();
   $('cDate').value = todayISO();
   buildFlights();
-  await renderHome();
+  try { await renderHome(); } catch(e){ console.error('home', e); }
+  if(dbErr){
+    $('dbStat').textContent = 'Storage error - ' + dbErr.message;
+    toast('Storage error - ' + dbErr.message);
+  }
   if('serviceWorker' in navigator){
     navigator.serviceWorker.register('sw.js').catch(()=>{});
   }
