@@ -15,7 +15,8 @@
   --sans:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
 }
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
-body{margin:0;background:var(--bg);color:var(--text);font-family:var(--sans);font-size:16px;padding-bottom:80px}
+html{overscroll-behavior-y:contain}
+body{margin:0;background:var(--bg);color:var(--text);font-family:var(--sans);font-size:16px;padding-bottom:120px;overscroll-behavior-y:contain}
 .wrap{max-width:680px;margin:0 auto;padding:14px}
 header{position:sticky;top:0;z-index:20;background:var(--bg);border-bottom:2px solid var(--amber);padding:12px 14px;display:flex;align-items:center;gap:10px}
 header h1{font-size:16px;margin:0;flex:1;font-weight:700}
@@ -57,12 +58,15 @@ button.ghost{width:100%;padding:13px 0;border:1px solid var(--line);border-radiu
 .card .meta{font-size:12px;color:var(--dim);margin-top:4px}
 .thumbs{display:flex;flex-wrap:wrap;gap:7px;margin-top:9px}
 .thumbs img{width:66px;height:66px;object-fit:cover;border-radius:6px;border:1px solid var(--line)}
+.cardbar{display:flex;align-items:center;gap:7px;margin-top:10px;padding-top:9px;border-top:1px solid var(--line)}
+.cardbar button{padding:8px 12px;border:1px solid var(--line);border-radius:7px;background:var(--bg);color:var(--text);font-size:12px}
+.cardbar .phc{margin-left:auto;font-family:var(--mono);font-size:11px;color:var(--dim)}
 .tag{display:inline-block;font-family:var(--mono);font-size:10px;padding:2px 7px;border-radius:99px;background:var(--surf2);color:var(--dim);margin-left:6px}
 .empty{color:var(--dim);font-size:14px;font-style:italic;padding:8px 0}
-.toast{position:fixed;left:50%;transform:translateX(-50%);bottom:88px;background:var(--surf2);border:1px solid var(--amber-dim);color:var(--text);padding:11px 16px;border-radius:9px;font-size:14px;z-index:60;max-width:88%;text-align:center;display:none}
+.toast{position:fixed;left:50%;transform:translateX(-50%);bottom:120px;background:var(--surf2);border:1px solid var(--amber-dim);color:var(--text);padding:11px 16px;border-radius:9px;font-size:14px;z-index:60;max-width:88%;text-align:center;display:none}
 .toast.show{display:block}
-.bar{position:fixed;bottom:0;left:0;right:0;background:var(--surf);border-top:1px solid var(--line);padding:9px 12px calc(9px + env(safe-area-inset-bottom));display:flex;gap:9px;z-index:30}
-.bar button{flex:1;padding:12px 0;border-radius:8px;border:1px solid var(--line);background:var(--bg);color:var(--text);font-size:13px}
+.bar{position:fixed;bottom:0;left:0;right:0;background:var(--surf);border-top:1px solid var(--line);padding:9px 12px calc(10px + max(20px, env(safe-area-inset-bottom)));display:flex;gap:9px;z-index:30}
+.bar button{flex:1;padding:12px 2px;font-size:13px;border-radius:8px;border:1px solid var(--line);background:var(--bg);color:var(--text);font-size:13px}
 .bar button.pri{background:var(--amber);color:var(--bg);border-color:var(--amber);font-weight:700}
 .scr{display:none}
 .scr.on{display:block}
@@ -277,11 +281,13 @@ button.ghost{width:100%;padding:13px 0;border:1px solid var(--line);border-radiu
 </div>
 
 <div class="bar" id="bar" style="display:none">
-  <button id="barPhoto">Add photo</button>
+  <button id="barCamera">Camera</button>
+  <button id="barGallery">Photos</button>
   <button id="barMenu" class="pri">Call menu</button>
 </div>
 
-<input type="file" id="photoInput" accept="image/*" capture="environment" multiple style="display:none">
+<input type="file" id="camInput" accept="image/*" capture="environment" multiple style="display:none">
+<input type="file" id="galInput" accept="image/*" multiple style="display:none">
 <div class="toast" id="toast"></div>
 
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>

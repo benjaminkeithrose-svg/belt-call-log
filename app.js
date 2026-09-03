@@ -455,11 +455,19 @@ $('hSave').addEventListener('click', async ()=>{
 });
 
 /* ---------- photos ---------- */
-$('barCamera').addEventListener('click', ()=>{ photoTarget=null; $('camInput').value=''; $('camInput').click(); });
-$('barGallery').addEventListener('click', ()=>{ photoTarget=null; $('galInput').value=''; $('galInput').click(); });
+function barPhotoTap(input){
+  if(!call){ toast('Open a call first'); return; }
+  if(!call.entries.length){ toast('Log a belt, project, note or fault first - photos attach to an entry'); return; }
+  photoTarget = null; input.value=''; input.click();
+}
+$('barCamera').addEventListener('click', ()=>barPhotoTap($('camInput')));
+$('barGallery').addEventListener('click', ()=>barPhotoTap($('galInput')));
 
 async function addPhotos(files){
-  if(!files.length || !call || !call.entries.length){ photoTarget=null; return; }
+  if(!files.length){ photoTarget=null; return; }
+  if(!call || !call.entries.length){
+    photoTarget=null; toast('Nothing to attach to - log an entry first'); return;
+  }
   const idx = (photoTarget!=null && call.entries[photoTarget]) ? photoTarget : call.entries.length-1;
   photoTarget = null;
   const entry = call.entries[idx];
@@ -610,6 +618,9 @@ function download(html){
 /* ---------- boot ---------- */
 (async function(){
   let dbErr = null;
+  if(navigator.storage && navigator.storage.persist){
+    try { await navigator.storage.persist(); } catch(e){ console.warn('persist', e); }
+  }
   try {
     await openDB();
     DATA = await kvGet('data');
