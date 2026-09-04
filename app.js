@@ -2,7 +2,7 @@
    State lives in IndexedDB. Nothing leaves the phone unless shared. */
 
 const DB_NAME = 'beltcall', DB_VER = 1;
-let db, dbReady = null, DATA = null, call = null, screen = 'home', photoTarget = null;
+let db, dbReady = null, DATA = null, REF = null, call = null, screen = 'home', photoTarget = null;
 
 /* ---------- storage ---------- */
 function openDB(){
@@ -145,6 +145,178 @@ async function importXlsx(file){
   fillManagers();
   toast('Imported '+payload.counts.contacts+' contacts');
 }
+/* ---------- belt reference import ----------
+   Read straight out of Plant_Audit_Template_1.xlsm so the app stays in step with the
+   workbook rather than carrying its own copy of the catalogue. Three sheets matter:
+
+     Belt Audit Data      Series_Ind / Belt_Style_Ind / Material_Ind / COLOR_IND
+                          -> every valid Series > Style > Material > Colour combination
+                          Series_Ind / Belt_Style_Ind / Material_Ind / Current_Lnk_Wth_Mm /
+                          Belt_Link_Increment / Minimum_Width_In_L / Protrusion_Thk_Mm
+                          -> link geometry, which is what makes the width check possible
+     SPROCKET SPILL DATA  Belt Series / Bore Description / Size Description / Material /
+                          Description / Part Number
+     BELT DATA            Series + Pitch, and the master lists the FORM sheet validates against
+
+   Both blocks on 'Belt Audit Data' repeat the same three header names, so columns are found
+   relative to an anchor that appears once (COLOR_IND, Current_Lnk_Wth_Mm, Belt Series) rather
+   than by a bare name lookup, which would silently pick up the wrong block. */
+const REF_SHEETS = ['Belt Audit Data','SPROCKET SPILL DATA','BELT DATA'];
+const norm = s => String(s==null?'':s).replace(/\s+/g,' ').trim().toLowerCase();
+const cell = v => (v==null ? '' : String(v).trim());
+const num  = v => { const n = parseFloat(v); return isNaN(n) ? 0 : n; };
+
+function findSheet(wb, want){
+  if(wb.Sheets[want]) return wb.Sheets[want];
+  const k = wb.SheetNames.find(n => norm(n) === norm(want));
+  if(!k) throw new Error('sheet "'+want+'" is not in that workbook');
+  return wb.Sheets[k];
+}
+function headerRow(rows, anchor){
+  for(let i=0; i<Math.min(rows.length, 8); i++){
+    if((rows[i]||[]).some(v => norm(v) === anchor)) return i;
+  }
+  throw new Error('could not find the "'+anchor+'" column');
+}
+function colAt(H, name, anchor, dir){
+  const t = norm(name);
+  if(dir < 0){ for(let i=anchor-1; i>=0; i--) if(H[i]===t) return i; }
+  else { for(let i=anchor+1; i<H.length; i++) if(H[i]===t) return i; }
+  throw new Error('could not find the "'+name+'" column');
+}
+function colOf(H, name){
+  const i = H.indexOf(norm(name));
+  if(i < 0) throw new Error('could not find the "'+name+'" column');
+  return i;
+}
+function uniqSort(arr){
+  return [...new Set(arr.filter(x => x !== '' && x != null))].sort((a,b)=>{
+    const na = Number(a), nb = Number(b);
+    const A = a !== '' && !isNaN(na), B = b !== '' && !isNaN(nb);
+    if(A && B) return na - nb;
+    if(A) return -1;
+    if(B) return 1;
+    return String(a).localeCompare(String(b));
+  });
+}
+
+async function importRef(file){
+  toast('Reading workbook - this takes a moment...');
+  await new Promise(r => setTimeout(r, 60));     // let the toast paint before we block the thread
+  const buf = await file.arrayBuffer();
+  const opts = {type:'array', cellStyles:false, cellNF:false, cellHTML:false, cellFormula:false};
+  let wb = XLSX.read(buf, Object.assign({sheets:REF_SHEETS}, opts));
+  if(!REF_SHEETS.every(n => wb.SheetNames.includes(n) && wb.Sheets[n])) wb = XLSX.read(buf, opts);
+  const grid = ws => XLSX.utils.sheet_to_json(ws, {header:1, raw:true, blankrows:true, defval:''});
+
+  /* combinations and link geometry */
+  const bad = grid(findSheet(wb, 'Belt Audit Data'));
+  const bh = headerRow(bad, 'color_ind');
+  const BH = (bad[bh]||[]).map(norm);
+  const cCol = colOf(BH, 'COLOR_IND');
+  const cSer = colAt(BH, 'Series_Ind', cCol, -1);
+  const cSty = colAt(BH, 'Belt_Style_Ind', cCol, -1);
+  const cMat = colAt(BH, 'Material_Ind', cCol, -1);
+  const gLw  = colOf(BH, 'Current_Lnk_Wth_Mm');
+  const gSer = colAt(BH, 'Series_Ind', gLw, -1);
+  const gSty = colAt(BH, 'Belt_Style_Ind', gLw, -1);
+  const gMat = colAt(BH, 'Material_Ind', gLw, -1);
+  const gInc = colAt(BH, 'Belt_Link_Increment', gLw, 1);
+  const gMin = colAt(BH, 'Minimum_Width_In_L', gLw, 1);
+  const gPro = colAt(BH, 'Protrusion_Thk_Mm', gLw, 1);
+  if(gSer === cSer) throw new Error('the geometry block on "Belt Audit Data" is missing');
+
+  const combos = [], geom = [];
+  for(let i=bh+1; i<bad.length; i++){
+    const r = bad[i] || [];
+    if(cell(r[cSer])) combos.push([cell(r[cSer]), cell(r[cSty]), cell(r[cMat]), cell(r[cCol])]);
+    if(cell(r[gSer])) geom.push([cell(r[gSer]), cell(r[gSty]), cell(r[gMat]),
+      num(r[gLw]), num(r[gInc]) || 1, num(r[gMin]), num(r[gPro])]);
+  }
+
+  /* sprockets */
+  const spl = grid(findSheet(wb, 'SPROCKET SPILL DATA'));
+  const sh = headerRow(spl, 'belt series');
+  const SH = (spl[sh]||[]).map(norm);
+  const sSer = colOf(SH, 'Belt Series');
+  const sBor = colAt(SH, 'Bore Description', sSer, 1);
+  const sPd  = colAt(SH, 'Size Description', sSer, 1);
+  const sMat = colAt(SH, 'Material', sSer, 1);
+  const sDsc = colAt(SH, 'Description', sSer, 1);
+  const sPn  = colAt(SH, 'Part Number', sSer, 1);
+  const sprockets = [];
+  for(let i=sh+1; i<spl.length; i++){
+    const r = spl[i] || [];
+    if(!cell(r[sSer])) continue;
+    sprockets.push([cell(r[sSer]), cell(r[sBor]), cell(r[sPd]), cell(r[sMat]), cell(r[sDsc]), cell(r[sPn])]);
+  }
+
+  /* master lists and per-series pitch */
+  const bd = grid(findSheet(wb, 'BELT DATA'));
+  const dh = headerRow(bd, 'rod material');
+  const DH = (bd[dh]||[]).map(norm);
+  const dSer = colOf(DH, 'Series'), dPit = colOf(DH, 'Pitch');
+  const dMat = colOf(DH, 'Material'), dCol = colOf(DH, 'Colour');
+  const dRod = colOf(DH, 'Rod Material'), dFlt = colOf(DH, 'Flight Style');
+  const dSg  = colOf(DH, 'Sideguard Style'), dInd = colOf(DH, 'Indent');
+
+  const pitch = {}, materials = [], colours = [], rods = [], flightTypes = [], sideguardTypes = [];
+  const indentGroups = [];
+  for(let i=dh+1; i<bd.length; i++){
+    const r = bd[i] || [];
+    const s = cell(r[dSer]);
+    if(/^series[_ ]/i.test(s)){
+      const p = num(r[dPit]);
+      if(p > 0) pitch[s.replace(/^series[_ ]/i,'')] = p;
+    }
+    if(cell(r[dMat])) materials.push(cell(r[dMat]));
+    if(cell(r[dCol])) colours.push(cell(r[dCol]));
+    if(cell(r[dRod])) rods.push(cell(r[dRod]));
+    if(cell(r[dFlt])) flightTypes.push(cell(r[dFlt]));
+    if(cell(r[dSg]))  sideguardTypes.push(cell(r[dSg]));
+    const iv = cell(r[dInd]);
+    if(iv){
+      const head = iv.match(/^-{2,}\s*(.+?)\s*-{2,}$/);
+      if(head) indentGroups.push([head[1], []]);
+      else if(indentGroups.length) indentGroups[indentGroups.length-1][1].push(iv);
+    }
+  }
+
+  if(!combos.length) throw new Error('no belt combinations found - check the workbook is the right one');
+  if(!sprockets.length) throw new Error('no sprocket rows found on "SPROCKET SPILL DATA"');
+
+  const payload = {
+    combos, geom, sprockets, pitch, indentGroups,
+    materials, colours, rods, flightTypes, sideguardTypes,
+    imported: Date.now(),
+    counts: {combos:combos.length, geom:geom.length, sprockets:sprockets.length,
+             series:new Set(combos.map(c=>c[0])).size}
+  };
+  await kvSet('beltref', payload);
+  REF = payload;
+  renderRefStat(); renderHomeSetup(); buildBeltRef();
+  toast('Loaded '+payload.counts.combos+' belt specs and '+payload.counts.sprockets+' sprockets');
+}
+function renderRefStat(){
+  const el = $('refStat');
+  if(!el) return;
+  if(!REF){ el.textContent = 'No data loaded.'; return; }
+  const d = new Date(REF.imported);
+  el.innerHTML = '<b>'+REF.counts.combos+'</b> belt specs across <b>'+REF.counts.series+'</b> series, <b>'+
+    REF.counts.sprockets+'</b> sprockets, <b>'+REF.counts.geom+'</b> geometry rows<br>Imported '+
+    d.toLocaleDateString()+' '+d.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'});
+}
+function renderHomeSetup(){
+  const el = $('homeSetup');
+  if(!el) return;
+  const missing = [];
+  if(!DATA) missing.push('contact database');
+  if(!REF) missing.push('belt reference data');
+  if(!missing.length){ el.className = 'msg'; el.innerHTML = ''; return; }
+  el.className = 'msg info show';
+  el.innerHTML = 'No '+missing.join(' or ')+' loaded yet. <span class="lnk" data-go="data">Open Data &amp; setup</span>';
+}
+
 function renderDbStat(){
   if(!DATA){ $('dbStat').textContent = 'No data loaded.'; return; }
   const d = new Date(DATA.imported);
@@ -170,7 +342,8 @@ function updateMgrHint(){
 const TITLES = {
   home:['Belt Call Log',''], account:['New call','Account'], contacts:['New call','Contacts'],
   dash:['Call','Menu'], belt:['Add belt',''], project:['Add project',''],
-  note:['General note',''], health:['Health check',''], compile:['Compile','']
+  note:['General note',''], health:['Health check',''], compile:['Compile',''],
+  data:['Data & setup','One-off import']
 };
 function go(name){
   screen = name;
@@ -185,6 +358,7 @@ function go(name){
   if(name==='dash') renderDash();
   if(name==='compile') renderCompileStat();
   if(name==='home') renderHome();
+  if(name==='data'){ renderDbStat(); renderRefStat(); }
 }
 $('back').addEventListener('click', ()=>{
   if(['belt','project','note','health','compile'].includes(screen)) return go('dash');
@@ -227,8 +401,11 @@ async function renderHome(){
     renderHome();
   }));
 }
-document.querySelectorAll('[data-go]').forEach(b=>b.addEventListener('click', async ()=>{
+document.addEventListener('click', async e => {
+  const b = e.target.closest('[data-go]');
+  if(!b) return;
   const t = b.dataset.go;
+  if(t==='data'){ go('data'); return; }
   if(t==='newcall'){
     if(!DATA){ toast('Import the contact database first'); return; }
     $('cDate').value = todayISO(); go('account'); renderAccSearch();
@@ -241,13 +418,19 @@ document.querySelectorAll('[data-go]').forEach(b=>b.addEventListener('click', as
   else if(t==='project'){ resetProject(); go('project'); }
   else if(t==='note'){ $('nText').value=''; go('note'); }
   else if(t==='health'){ resetHealth(); go('health'); }
-}));
+});
 
 /* ---------- import wiring ---------- */
 $('importBtn').addEventListener('click', async ()=>{
   const f = $('xlsxFile').files[0];
   if(!f){ toast('Choose an .xlsx file first'); return; }
-  try { await importXlsx(f); }
+  try { await importXlsx(f); renderHomeSetup(); }
+  catch(e){ console.error(e); toast('Import failed: '+e.message); }
+});
+$('refBtn').addEventListener('click', async ()=>{
+  const f = $('refFile').files[0];
+  if(!f){ toast('Choose the .xlsm workbook first'); return; }
+  try { await importRef(f); }
   catch(e){ console.error(e); toast('Import failed: '+e.message); }
 });
 
@@ -368,7 +551,13 @@ function renderDash(){
   if(!c.entries.length){ el.innerHTML = '<p class="empty">Nothing logged yet.</p>'; return; }
   el.innerHTML = c.entries.map((e,i)=>{
     let head='', body='';
-    if(e.type==='belt'){ head='Belt - '+e.asset; body=[e.beltdesc,e.width?e.width+' mm':'',e.beltmat,e.rodmat,e.retrofit?'retrofit '+e.retrofit:'',e.sprocket].filter(Boolean).join(' &middot; '); }
+    if(e.type==='belt'){
+      head='Belt - '+e.asset;
+      const spec = [e.series?'S'+e.series:'', e.style, e.beltmat, e.colour].filter(Boolean).join(' ');
+      body=[e.beltdesc, spec, e.width?e.width+' mm wide':'', e.rodmat?e.rodmat+' rod':'',
+            e.retrofit?'retrofit '+e.retrofit:'', e.sprpd||e.sprocket,
+            e.flights?'flights':''].filter(Boolean).join(' &middot; ');
+    }
     if(e.type==='project'){ head='Project - '+e.project; body=[e.status,e.next,e.target].filter(Boolean).join(' &middot; '); }
     if(e.type==='note'){ head='Note - '+e.topic; body=esc(e.text); }
     if(e.type==='health'){ head='Health - '+(e.asset||'unspecified'); body=[e.fault,e.severity].filter(Boolean).join(' &middot; '); }
@@ -423,45 +612,494 @@ $('closeCall').addEventListener('click', async ()=>{
 $('toCompile').addEventListener('click', ()=>go('compile'));
 $('barMenu').addEventListener('click', ()=>go('dash'));
 
-/* ---------- entry: belt ---------- */
-const FLIGHTS = [['fspacing','Flight spacing'],['findent','Flight indent'],['cnotch','Centre notch'],['fheight','Flight height'],['fstyle','Flight style']];
-function buildFlights(){
-  $('flightWrap').innerHTML = FLIGHTS.map(([id,label])=>
-    '<div class="fld"><label>'+label+'</label>'+
-    '<input type="text" id="f_'+id+'" disabled>'+
-    '<label class="na"><input type="checkbox" id="na_'+id+'" checked> N/A</label></div>'
-  ).join('');
-  FLIGHTS.forEach(([id])=>{
-    $('na_'+id).addEventListener('change', e=>{
-      const inp = $('f_'+id); inp.disabled = e.target.checked;
-      if(e.target.checked) inp.value=''; else inp.focus();
-    });
-  });
+/* ---------- entry: belt ----------
+   Mirrors the plant audit line entry form: the same Series > Style > Material > Colour
+   cascade, the same width and frame checks off the link geometry, the same sprocket
+   cascade and quantity rule, and the same flight spacing conversion. Everything is driven
+   by the imported workbook, so with no reference data loaded the pickers sit empty and the
+   free-text fields still carry the call. Health check stays its own entry type. */
+
+const DEFAULT_BORE = '40 mm square';
+const FALLBACK_ROD = ['ACETAL','POLYPROPYLENE','POLYETHYLENE','PK','NYLON'];
+
+function populateSel(el, values, placeholder, withOther){
+  if(!el) return;
+  el.innerHTML = '<option value="">'+esc(placeholder)+'</option>' +
+    values.map(v => '<option value="'+esc(v)+'">'+esc(v)+'</option>').join('') +
+    (withOther ? '<option value="OTHER">Other...</option>' : '');
 }
+function keepValue(el, prev){
+  if(prev && [...el.options].some(o => o.value === prev)) el.value = prev;
+}
+function showMsg(el, cls, html){
+  el.className = html ? 'msg '+cls+' show' : 'msg';
+  el.innerHTML = html || '';
+}
+function otherPair(sel, other){
+  const sync = () => other.classList.toggle('hide', sel.value !== 'OTHER');
+  sel.addEventListener('change', sync);
+  return () => sel.value === 'OTHER' ? other.value.trim() : sel.value;
+}
+
+/* ---------- populate everything the workbook drives ---------- */
+function buildBeltRef(){
+  const warn = $('refWarn');
+  if(!REF){
+    showMsg(warn, 'info', 'No belt reference data loaded, so the pickers below are empty. ' +
+      'The description and measurement fields still work. ' +
+      '<span class="lnk" data-go="data">Import the workbook</span>');
+  } else {
+    showMsg(warn, '', '');
+  }
+  const R = REF || {combos:[], geom:[], sprockets:[], pitch:{}, indentGroups:[],
+                    materials:[], colours:[], rods:[], flightTypes:[], sideguardTypes:[]};
+
+  populateSel($('bSeries'), uniqSort(R.combos.map(c=>c[0])),
+    R.combos.length ? 'Select series...' : 'Import reference data');
+
+  const mats = R.materials.length ? R.materials : uniqSort(R.combos.map(c=>c[2]));
+  populateSel($('bFlMat'), mats, 'Select flight material...');
+  populateSel($('bSgMat'), mats, 'Select sideguard material...');
+  populateSel($('bFlType'), R.flightTypes, 'Select flight type...', true);
+  populateSel($('bSgType'), R.sideguardTypes, 'Select sideguard type...', true);
+
+  const rods = R.rods.length ? R.rods : FALLBACK_ROD;
+  const chips = $('bRodChips');
+  chips.innerHTML = rods.map(v => '<button type="button" data-rod="'+esc(v)+'">'+esc(v)+'</button>').join('') +
+    '<button type="button" data-rod="OTHER">Other...</button>';
+  chips.querySelectorAll('button').forEach(b => b.addEventListener('click', () => {
+    const was = b.classList.contains('on');
+    chips.querySelectorAll('button').forEach(x => x.classList.remove('on'));
+    if(!was) b.classList.add('on');
+    $('bRodOther').classList.toggle('hide', !(b.dataset.rod === 'OTHER' && !was));
+  }));
+
+  populateSprBores();
+  populateIndent();
+  updatePitch();
+}
+function rodValue(){
+  const on = $('bRodChips').querySelector('button.on');
+  if(!on) return '';
+  return on.dataset.rod === 'OTHER' ? $('bRodOther').value.trim() : on.dataset.rod;
+}
+
+/* ---------- Series > Style > Material > Colour ---------- */
+const serSel = () => $('bSeries'), stySel = () => $('bStyle'),
+      matSel = () => $('bMat'), colSel = () => $('bColour');
+const combos = () => (REF ? REF.combos : []);
+
+function onSeries(reset){
+  const s = serSel().value;
+  const styles = uniqSort(combos().filter(c=>c[0]===s).map(c=>c[1]));
+  populateSel(stySel(), styles, styles.length ? 'Select style...' : 'No styles on file');
+  stySel().disabled = !s;
+  if(reset !== false){
+    populateSel(matSel(), [], 'Select style first'); matSel().disabled = true;
+    populateSel(colSel(), [], 'Select material first'); colSel().disabled = true;
+  }
+  runWidthCheck();
+  populateSprBores();
+  const p = pitchMm(), rows = parseFloat($('bFlRows').value);
+  if(p && rows > 0) $('bFlMm').value = round1(rows * p);
+  updatePitch();
+}
+function onStyle(reset){
+  const s = serSel().value, st = stySel().value;
+  const ms = uniqSort(combos().filter(c=>c[0]===s && c[1]===st).map(c=>c[2]));
+  populateSel(matSel(), ms, ms.length ? 'Select material...' : 'No materials on file');
+  matSel().disabled = !st;
+  if(reset !== false){ populateSel(colSel(), [], 'Select material first'); colSel().disabled = true; }
+  runWidthCheck();
+  populateIndent();
+}
+function onMaterial(){
+  const s = serSel().value, st = stySel().value, m = matSel().value;
+  const cs = uniqSort(combos().filter(c=>c[0]===s && c[1]===st && c[2]===m).map(c=>c[3]));
+  populateSel(colSel(), cs, cs.length ? 'Select colour...' : 'No colours on file');
+  colSel().disabled = !m;
+  runWidthCheck();
+  syncFlightMaterial();
+}
+function setCascade(s, st, m, c){
+  serSel().value = s || ''; onSeries(false);
+  stySel().value = st || ''; onStyle(false);
+  matSel().value = m || ''; onMaterial();
+  colSel().value = c || '';
+  runWidthCheck();
+}
+
+/* ---------- belt width against buildable increments ----------
+   The same arithmetic the workbook does in its EU..FC columns: from the link width,
+   protrusion, increment and minimum link count for this spec, work out the widths that
+   can actually be built and flag anything landing between them. */
+function runWidthCheck(){
+  const el = $('bWidthMsg');
+  const s = serSel().value, st = stySel().value, m = matSel().value;
+  const w = parseFloat($('bWidth').value);
+  showMsg(el, '', '');
+  if(!REF || !s || !st || !m || isNaN(w) || w <= 0) return;
+  const g = REF.geom.find(x => x[0]===s && x[1]===st && x[2]===m);
+  if(!g) return;
+  const linkW = g[3], inc = g[4] || 1, minL = g[5] || 0, prot = g[6] || 0;
+  if(!linkW) return;
+  const working = w - 2*prot;
+  const above = (working - minL*linkW) / linkW;
+  const lower = (minL + Math.floor(above/inc)*inc) * linkW + 2*prot;
+  const upper = (minL + Math.ceil(above/inc)*inc) * linkW + 2*prot;
+  if(Math.abs(w-lower) < 0.5 || Math.abs(w-upper) < 0.5){
+    showMsg(el, 'ok', w+' mm is a standard built width for this spec.');
+  } else if(Math.abs(lower-upper) < 0.5){
+    showMsg(el, 'warn', w+' mm is not a standard increment. Nearest built width is <b>'+Math.round(lower)+' mm</b>.');
+  } else {
+    showMsg(el, 'warn', w+' mm is not a standard increment. Nearest built widths are <b>'+
+      Math.round(lower)+' mm</b> or <b>'+Math.round(upper)+' mm</b>.');
+  }
+}
+/* The belt has to sit inside the frame, so equal or narrower means a figure is wrong. */
+function runFrameCheck(){
+  const el = $('bFrameMsg'), fe = $('bFrame'), be = $('bWidth');
+  const f = parseFloat(fe.value), b = parseFloat(be.value);
+  showMsg(el, '', '');
+  fe.classList.remove('alert'); be.classList.remove('alert');
+  if(isNaN(f) || isNaN(b) || f <= 0 || b <= 0) return;
+  if(f < b){
+    showMsg(el, 'warn', 'Inside frame ('+f+' mm) is narrower than the belt ('+b+' mm). Check both measurements.');
+    fe.classList.add('alert'); be.classList.add('alert');
+  } else if(f === b){
+    showMsg(el, 'warn', 'Frame and belt are both '+b+' mm, so there is no clearance. Check both measurements.');
+    fe.classList.add('alert'); be.classList.add('alert');
+  }
+}
+
+/* ---------- sprockets: Bore > PD/teeth > Material > variant ---------- */
+const sprPool = () => {
+  if(!REF) return [];
+  const s = serSel().value;
+  return s ? REF.sprockets.filter(x => x[0] === s) : REF.sprockets;
+};
+function populateSprBores(){
+  const el = $('bSprBore'), prev = el.value;
+  const bores = uniqSort(sprPool().map(x => x[1]));
+  populateSel(el, bores, bores.length ? 'Select bore...' : 'No sprockets for this series');
+  if(bores.includes(prev)) el.value = prev;
+  else if(bores.includes(DEFAULT_BORE)) el.value = DEFAULT_BORE;
+  onSprBore(false);
+}
+function onSprBore(reset){
+  const b = $('bSprBore').value;
+  const pds = uniqSort(sprPool().filter(x => x[1]===b).map(x => x[2]));
+  populateSel($('bSprPd'), pds, pds.length ? 'Select pitch diameter...' : 'No data for this bore');
+  $('bSprPd').disabled = !b;
+  if(reset !== false){ populateSel($('bSprMat'), [], 'Select pitch diameter first'); $('bSprMat').disabled = true; }
+  matchSprocket();
+}
+function onSprPd(){
+  const b = $('bSprBore').value, p = $('bSprPd').value;
+  const ms = uniqSort(sprPool().filter(x => x[1]===b && x[2]===p).map(x => x[3]));
+  populateSel($('bSprMat'), ms, ms.length ? 'Select material...' : 'No data for this pitch');
+  $('bSprMat').disabled = !p;
+  onSprMat();
+}
+/* The variant picker only appears where a spec genuinely has more than one build on
+   file - EZ Clean, Split Metal, Double Wide Rim and so on. */
+function onSprMat(){
+  const b = $('bSprBore').value, p = $('bSprPd').value, m = $('bSprMat').value;
+  const vs = uniqSort(sprPool().filter(x => x[1]===b && x[2]===p && x[3]===m).map(x => x[4]));
+  const wrap = $('bSprVarWrap'), sel = $('bSprVar');
+  if(vs.length > 1){
+    populateSel(sel, vs, 'Select build type...');
+    wrap.classList.remove('hide');
+  } else {
+    wrap.classList.add('hide');
+    sel.innerHTML = vs.length ? '<option value="'+esc(vs[0])+'" selected>'+esc(vs[0])+'</option>' : '';
+  }
+  matchSprocket();
+}
+function sprVariant(){
+  const sel = $('bSprVar');
+  if(!$('bSprVarWrap').classList.contains('hide')) return sel.value;
+  return sel.options.length ? sel.options[0].value : '';
+}
+let sprDescTouched = false, sprPnTouched = false, sprDriveTouched = false, sprIdleTouched = false;
+function matchSprocket(){
+  const b = $('bSprBore').value, p = $('bSprPd').value, m = $('bSprMat').value;
+  if(!b || !p || !m) return;
+  const pool = sprPool().filter(x => x[1]===b && x[2]===p && x[3]===m);
+  const v = sprVariant();
+  const hit = (v ? pool.find(x => x[4]===v) : null) || pool[0];
+  if(!hit) return;
+  if(!sprDescTouched) $('bSprDesc').value = hit[4] || '';
+  if(!sprPnTouched && hit[5]) $('bSprPn').value = hit[5];
+}
+/* Drive and idle quantity follow the workbook's own =ODD(width/152) rule,
+   152 mm being the maximum sprocket centre spacing. */
+function oddUp(n){ let v = Math.ceil(n); if(v % 2 === 0) v += 1; return Math.max(v, 1); }
+function updateSprQty(){
+  const w = parseFloat($('bWidth').value);
+  if(isNaN(w) || w <= 0) return;
+  const q = oddUp(w / 152);
+  if(!sprDriveTouched) $('bSprDrive').value = q;
+  if(!sprIdleTouched) $('bSprIdle').value = q;
+}
+
+/* ---------- flights, spacing and indent ---------- */
+let flMatTouched = false;
+function syncFlightMaterial(){
+  if(flMatTouched) return;
+  const m = matSel().value;
+  if(!m) return;
+  const sel = $('bFlMat');
+  if(![...sel.options].some(o => o.value === m)){
+    const o = document.createElement('option'); o.value = m; o.textContent = m; sel.appendChild(o);
+  }
+  sel.value = m;
+}
+const round1 = n => Math.round(n*10)/10;
+const pitchMm = () => {
+  const s = serSel().value;
+  return (REF && s && REF.pitch[s]) ? REF.pitch[s] : null;
+};
+function fmtIn(mm){
+  const i = mm/25.4;
+  return (Math.abs(i - Math.round(i)) < 0.01 ? Math.round(i) : i.toFixed(2)) + '"';
+}
+function updatePitch(){
+  const el = $('bPitchMsg'), p = pitchMm(), s = serSel().value;
+  if(!p){
+    $('bFlRows').disabled = !!s;
+    showMsg(el, 'info', s ? 'No pitch on file for Series '+esc(s)+'. Enter spacing in millimetres.' : '');
+    return;
+  }
+  $('bFlRows').disabled = false;
+  let m = 'Series '+esc(s)+' runs a <b>'+p+' mm ('+fmtIn(p)+') pitch</b>.';
+  const rows = parseFloat($('bFlRows').value), mm = parseFloat($('bFlMm').value);
+  if(rows > 0){
+    m += ' '+rows+' row'+(rows===1?'':'s')+' = <b>'+round1(rows*p)+' mm</b> ('+fmtIn(rows*p)+').';
+  } else if(mm > 0){
+    const r = mm/p;
+    m += Math.abs(r - Math.round(r)) < 0.02
+      ? ' '+round1(mm)+' mm = <b>'+Math.round(r)+' rows</b>.'
+      : ' '+round1(mm)+' mm = <b>'+r.toFixed(2)+' rows</b>, which is not a whole number of rows.';
+  }
+  showMsg(el, 'info', m);
+}
+/* Indent values are grouped by surface in the workbook, so the belt style decides which
+   group applies. Flights carry their own values, added once a flight type is set. */
+let indentAll = false;
+function surfaceGroups(style){
+  const s = (style || '').toUpperCase(), g = [];
+  if(!s) return g;
+  if(/FRICT(ION)?\s*TOP|OHFT|^FT[\s\/]|NON-SKID|MINI-RIB|RAISED RIB/.test(s)) g.push('Friction Top');
+  if(/ROLLER/.test(s)) g.push('Roller Top');
+  if(/NUB|CONE|DIAMOND|MESH|BALL/.test(s)) g.push('Nub / Cone etc');
+  return g;
+}
+function populateIndent(){
+  const sel = $('bIndent'), note = $('bIndentMsg'), prev = sel.value;
+  const groups = (REF && REF.indentGroups.length) ? REF.indentGroups : [];
+  if(!groups.length){
+    populateSel(sel, [], 'Import reference data', true);
+    showMsg(note, '', '');
+    return;
+  }
+  const active = indentAll ? groups.map(g=>g[0]) : surfaceGroups(stySel().value);
+  if(!indentAll && flightType()) active.push('Flights');
+  const shown = groups.filter(([l]) => active.includes(l));
+
+  if(!indentAll && !shown.length){
+    /* Flat and open surfaces carry no indent of their own until flights are fitted,
+       so offer Zero rather than every value from every unrelated group. */
+    sel.innerHTML = '<option value="">Select indent...</option><option value="Zero">Zero</option>' +
+      '<option value="OTHER">Other...</option>';
+    keepValue(sel, prev);
+    $('bIndentOther').classList.toggle('hide', sel.value !== 'OTHER');
+    showMsg(note, 'info', (stySel().value
+      ? '<b>'+esc(stySel().value)+'</b> has no surface indent, so normally <b>Zero</b> unless flights are fitted.'
+      : 'Pick a style to narrow these down.') + ' <span class="lnk" id="indentAllLnk">show all values</span>');
+    wireIndentToggle();
+    return;
+  }
+  const use = shown.length ? shown : groups;
+  sel.innerHTML = '<option value="">Select indent...</option>' +
+    use.map(([l, vals]) => '<optgroup label="'+esc(l)+'">' +
+      vals.map(v => '<option value="'+esc(v)+'">'+esc(v)+'</option>').join('') + '</optgroup>').join('') +
+    '<option value="OTHER">Other...</option>';
+  keepValue(sel, prev);
+  $('bIndentOther').classList.toggle('hide', sel.value !== 'OTHER');
+  const n = use.reduce((a,g)=>a+g[1].length, 0);
+  showMsg(note, 'info', indentAll
+    ? 'Showing all <b>'+n+'</b> indent values. <span class="lnk" id="indentAllLnk">filter to this belt</span>'
+    : 'Filtered to <b>'+esc(use.map(g=>g[0]).join(' + '))+'</b> ('+n+' values) from the belt style. ' +
+      '<span class="lnk" id="indentAllLnk">show all</span>');
+  wireIndentToggle();
+}
+function wireIndentToggle(){
+  const l = $('indentAllLnk');
+  if(l) l.addEventListener('click', () => { indentAll = !indentAll; populateIndent(); });
+}
+
+/* ---------- value readers ---------- */
+let flightType, sgType, indentValue;
+
+/* ---------- wiring ---------- */
+serSel().addEventListener('change', () => onSeries());
+stySel().addEventListener('change', () => onStyle());
+matSel().addEventListener('change', onMaterial);
+$('bWidth').addEventListener('input', () => { runWidthCheck(); runFrameCheck(); updateSprQty(); });
+$('bFrame').addEventListener('input', runFrameCheck);
+$('bSprBore').addEventListener('change', () => onSprBore());
+$('bSprPd').addEventListener('change', onSprPd);
+$('bSprMat').addEventListener('change', onSprMat);
+$('bSprVar').addEventListener('change', matchSprocket);
+$('bSprDesc').addEventListener('input', () => { sprDescTouched = true; $('bSprDescAuto').classList.add('off'); });
+$('bSprPn').addEventListener('input', () => { sprPnTouched = true; $('bSprPnAuto').classList.add('off'); });
+$('bSprDrive').addEventListener('input', () => { sprDriveTouched = true; $('bSprDrvAuto').classList.add('off'); });
+$('bSprIdle').addEventListener('input', () => { sprIdleTouched = true; $('bSprIdlAuto').classList.add('off'); });
+$('bFlMat').addEventListener('change', () => { flMatTouched = true; $('bFlMatAuto').classList.add('off'); });
+
+flightType = otherPair($('bFlType'), $('bFlTypeOther'));
+sgType     = otherPair($('bSgType'), $('bSgTypeOther'));
+indentValue = otherPair($('bIndent'), $('bIndentOther'));
+$('bFlType').addEventListener('change', populateIndent);
+
+let lenTouched = false;
+$('bLen').addEventListener('input', () => { lenTouched = true; $('bLenAuto').classList.add('off'); });
+$('bCvLen').addEventListener('input', () => {
+  if(lenTouched) return;
+  const v = parseFloat($('bCvLen').value);
+  if(!isNaN(v)) $('bLen').value = (v*2.05 + 0.5).toFixed(2);
+});
+
+let spacingSync = false;
+$('bFlRows').addEventListener('input', () => {
+  if(spacingSync) return;
+  const p = pitchMm(), rows = parseFloat($('bFlRows').value);
+  spacingSync = true;
+  if(p && rows > 0) $('bFlMm').value = round1(rows*p);
+  else if($('bFlRows').value === '') $('bFlMm').value = '';
+  spacingSync = false;
+  updatePitch();
+});
+$('bFlMm').addEventListener('input', () => {
+  if(spacingSync) return;
+  const p = pitchMm(), mm = parseFloat($('bFlMm').value);
+  spacingSync = true;
+  if(p && mm > 0){
+    const r = mm/p;
+    $('bFlRows').value = Math.abs(r - Math.round(r)) < 0.02 ? Math.round(r) : '';
+  } else if($('bFlMm').value === '') $('bFlRows').value = '';
+  spacingSync = false;
+  updatePitch();
+});
+
+function toggleSkip(box, bodyId){
+  $(bodyId).classList.toggle('hide', box.checked);
+}
+$('bSkipSpr').addEventListener('change', e => toggleSkip(e.target, 'bSprBody'));
+$('bSkipAcc').addEventListener('change', e => toggleSkip(e.target, 'bAccBody'));
+
 let bRetroVal = '';
-function resetBelt(){
-  ['bAsset','bDesc','bWidth','bClen','bSprk','bQc'].forEach(i=>$(i).value='');
-  $('bMat').value='Unknown'; $('bRod').value='Unknown';
-  bRetroVal=''; document.querySelectorAll('#bRetro button').forEach(x=>x.classList.remove('on'));
-  $('bErr').classList.remove('show'); buildFlights();
-}
-document.querySelectorAll('#bRetro button').forEach(b=>b.addEventListener('click',()=>{
-  document.querySelectorAll('#bRetro button').forEach(x=>x.classList.remove('on'));
+document.querySelectorAll('#bRetro button').forEach(b => b.addEventListener('click', () => {
+  document.querySelectorAll('#bRetro button').forEach(x => x.classList.remove('on'));
   b.classList.add('on'); bRetroVal = b.dataset.v;
 }));
-$('bSave').addEventListener('click', async ()=>{
+
+/* ---------- copy the spec off a belt already on this call ---------- */
+function refreshBeltCopy(){
+  const sel = $('bCopy');
+  const belts = call ? call.entries.filter(e => e.type === 'belt') : [];
+  $('bCopyWrap').classList.toggle('hide', !belts.length);
+  sel.innerHTML = '<option value="">Start from blank</option>' +
+    belts.map((b, i) => '<option value="'+i+'">'+esc(b.asset || ('Belt '+(i+1)))+
+      (b.beltdesc ? ' - '+esc(b.beltdesc) : '')+'</option>').join('');
+}
+$('bCopy').addEventListener('change', () => {
+  const belts = call.entries.filter(e => e.type === 'belt');
+  const b = belts[+$('bCopy').value];
+  if(!b) return;
+  $('bDesc').value = b.beltdesc || '';
+  setCascade(b.series, b.style, b.beltmat, b.colour);
+  const chips = $('bRodChips');
+  chips.querySelectorAll('button').forEach(x => x.classList.remove('on'));
+  const chip = [...chips.querySelectorAll('button')].find(x => x.dataset.rod === b.rodmat);
+  if(chip) chip.classList.add('on');
+  else if(b.rodmat){
+    const o = [...chips.querySelectorAll('button')].find(x => x.dataset.rod === 'OTHER');
+    if(o){ o.classList.add('on'); $('bRodOther').classList.remove('hide'); $('bRodOther').value = b.rodmat; }
+  }
+  $('bFrame').value = b.frame || '';
+  $('bWidth').value = b.width || '';
+  if(b.sprbore){
+    $('bSprBore').value = b.sprbore; onSprBore(false);
+    $('bSprPd').value = b.sprpd || ''; onSprPd();
+    $('bSprMat').value = b.sprmat || ''; onSprMat();
+  }
+  runWidthCheck(); runFrameCheck(); updateSprQty();
+  toast('Copied the spec from '+(b.asset || 'that belt'));
+});
+
+/* ---------- reset and save ---------- */
+function resetBelt(){
+  ['bAsset','bDesc','bCvLen','bFrame','bWidth','bLen','bSprDesc','bSprPn','bSprDrive','bSprIdle',
+   'bFlHeight','bFlRows','bFlMm','bNotch','bSgHeight','bQc','bRodOther','bFlTypeOther',
+   'bSgTypeOther','bIndentOther'].forEach(i => { if($(i)) $(i).value = ''; });
+  ['bRodOther','bFlTypeOther','bSgTypeOther','bIndentOther'].forEach(i => $(i).classList.add('hide'));
+  $('bRodChips').querySelectorAll('button').forEach(x => x.classList.remove('on'));
+  bRetroVal = ''; document.querySelectorAll('#bRetro button').forEach(x => x.classList.remove('on'));
+  sprDescTouched = sprPnTouched = sprDriveTouched = sprIdleTouched = false;
+  flMatTouched = lenTouched = false; indentAll = false;
+  ['bSprDescAuto','bSprPnAuto','bSprDrvAuto','bSprIdlAuto','bFlMatAuto','bLenAuto']
+    .forEach(i => $(i).classList.remove('off'));
+  $('bSkipSpr').checked = false; $('bSprBody').classList.remove('hide');
+  $('bSkipAcc').checked = true;  $('bAccBody').classList.add('hide');
+  $('bFlType').value = ''; $('bFlMat').value = ''; $('bSgType').value = ''; $('bSgMat').value = '';
+  $('bErr').classList.remove('show');
+  $('bFrame').classList.remove('alert'); $('bWidth').classList.remove('alert');
+  showMsg($('bWidthMsg'), '', ''); showMsg($('bFrameMsg'), '', '');
+  setCascade('', '', '', '');
+  populateSprBores(); populateIndent(); updatePitch();
+  refreshBeltCopy();
+}
+
+$('bSave').addEventListener('click', async () => {
   const a = $('bAsset').value.trim();
   if(!a){ $('bErr').classList.add('show'); $('bAsset').focus(); return; }
-  const e = {type:'belt', asset:a, beltdesc:$('bDesc').value.trim(), width:$('bWidth').value.trim(),
-    beltmat:$('bMat').value, rodmat:$('bRod').value, retrofit:bRetroVal,
-    clength:$('bClen').value.trim(), sprocket:$('bSprk').value.trim(),
-    qcontact:$('bQc').value.trim(), photos:[]};
-  FLIGHTS.forEach(([id])=>{ e[id] = $('na_'+id).checked ? 'N/A' : ($('f_'+id).value.trim()||'N/A'); });
-  call.entries.push(e); await saveCall();
+  const skipSpr = $('bSkipSpr').checked, skipAcc = $('bSkipAcc').checked;
+  const v = id => $(id).value.trim();
+
+  const e = {
+    type:'belt', asset:a, beltdesc:v('bDesc'),
+    series:serSel().value, style:stySel().value, beltmat:matSel().value, colour:colSel().value,
+    rodmat:rodValue(),
+    clength:v('bCvLen'), frame:v('bFrame'), width:v('bWidth'), beltlen:v('bLen'),
+    retrofit:bRetroVal,
+    sprocket: skipSpr ? '' : v('bSprDesc'),
+    sprbore: skipSpr ? '' : $('bSprBore').value,
+    sprpd:   skipSpr ? '' : $('bSprPd').value,
+    sprmat:  skipSpr ? '' : $('bSprMat').value,
+    sprvar:  skipSpr ? '' : sprVariant(),
+    sprpn:   skipSpr ? '' : v('bSprPn'),
+    sprdrive:skipSpr ? '' : v('bSprDrive'),
+    spridle: skipSpr ? '' : v('bSprIdle'),
+    flights: !skipAcc,
+    fstyle:  skipAcc ? '' : flightType(),
+    flmat:   skipAcc ? '' : $('bFlMat').value,
+    fheight: skipAcc ? '' : v('bFlHeight'),
+    frows:   skipAcc ? '' : v('bFlRows'),
+    fspacing:skipAcc ? '' : v('bFlMm'),
+    findent: skipAcc ? '' : indentValue(),
+    cnotch:  skipAcc ? '' : v('bNotch'),
+    sgtype:  skipAcc ? '' : sgType(),
+    sgmat:   skipAcc ? '' : $('bSgMat').value,
+    sgheight:skipAcc ? '' : v('bSgHeight'),
+    qcontact:v('bQc'), photos:[]
+  };
+  call.entries.push(e);
+  await saveCall();
   toast('Belt '+a+' logged - add a photo if you want one');
   go('dash');
 });
-
 /* ---------- entry: project ---------- */
 function resetProject(){ ['pName','pNext','pTarg','pOwner','pNotes'].forEach(i=>$(i).value=''); $('pStat').value='Being considered'; $('pErr').classList.remove('show'); }
 $('pSave').addEventListener('click', async ()=>{
@@ -615,11 +1253,25 @@ function buildNotesHTML(){
     p.push('<h2>Belts to quote</h2>');
     belts.forEach((b,i)=>{
       p.push('<div class="blk"><h3>Belt '+(i+1)+' '+DASH_CH+' '+V(b.asset)+'</h3><table>');
-      [['Belt description',b.beltdesc],['Belt width (mm)',b.width],['Belt material',b.beltmat],
-       ['Rod material',b.rodmat],['Retrofit',b.retrofit],['Centre line length (m)',b.clength],
-       ['Sprocket details',b.sprocket],['Flight spacing',b.fspacing],['Flight indent',b.findent],
-       ['Centre notch',b.cnotch],['Flight height',b.fheight],['Flight style',b.fstyle]]
-        .forEach(([l,v])=>p.push('<tr><td class="l">'+l+'</td><td>'+V(v)+'</td></tr>'));
+      const rows = [
+        ['Belt description',b.beltdesc],['Series',b.series],['Style',b.style],
+        ['Material',b.beltmat],['Colour',b.colour],['Rod material',b.rodmat],
+        ['Conveyor length (m)',b.clength],['Inside frame width (mm)',b.frame],
+        ['Belt width (mm)',b.width],['Belt length (m)',b.beltlen],['Retrofit',b.retrofit]
+      ];
+      const spr = [['Sprocket bore',b.sprbore],['Pitch diameter / teeth',b.sprpd],
+        ['Sprocket material',b.sprmat],['Build type',b.sprvar],['Sprocket description',b.sprocket],
+        ['Part number',b.sprpn],['Drive qty',b.sprdrive],['Idle qty',b.spridle]];
+      const acc = [['Flight type',b.fstyle],['Flight material',b.flmat],['Flight height (mm)',b.fheight],
+        ['Flight spacing (rows)',b.frows],['Flight spacing (mm)',b.fspacing],['Indent (mm)',b.findent],
+        ['Centre notch (mm)',b.cnotch],['Sideguard type',b.sgtype],['Sideguard material',b.sgmat],
+        ['Sideguard height (mm)',b.sgheight]];
+      const live = a => a.filter(([,v]) => v != null && String(v).trim() !== '' && v !== 'N/A');
+      rows.forEach(([l,v])=>p.push('<tr><td class="l">'+l+'</td><td>'+V(v)+'</td></tr>'));
+      if(live(spr).length) live(spr).forEach(([l,v])=>p.push('<tr><td class="l">'+l+'</td><td>'+V(v)+'</td></tr>'));
+      else p.push('<tr><td class="l">Sprockets</td><td>Not assessed</td></tr>');
+      if(live(acc).length) live(acc).forEach(([l,v])=>p.push('<tr><td class="l">'+l+'</td><td>'+V(v)+'</td></tr>'));
+      else p.push('<tr><td class="l">Flights and sideguards</td><td>None on this belt</td></tr>');
       if(b.qcontact) p.push('<tr><td class="l">Quote contact</td><td>'+V(b.qcontact)+'</td></tr>');
       p.push('</table>');
       if(b.photos && b.photos.length) p.push('<div class="ph">'+b.photos.map(x=>'<img src="'+x+'">').join('')+'</div>');
@@ -684,10 +1336,11 @@ function download(html){
   try {
     await openDB();
     DATA = await kvGet('data');
+    REF = await kvGet('beltref');
   } catch(e){ dbErr = e; console.error('storage', e); }
-  renderDbStat(); fillManagers();
+  renderDbStat(); renderRefStat(); renderHomeSetup(); fillManagers();
   $('cDate').value = todayISO();
-  buildFlights();
+  buildBeltRef();
   try { await renderHome(); } catch(e){ console.error('home', e); }
   if(dbErr){
     $('dbStat').textContent = 'Storage error - ' + dbErr.message;

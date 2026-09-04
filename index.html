@@ -85,6 +85,32 @@ button.ghost{width:100%;padding:13px 0;border:1px solid var(--line2);border-radi
 .scr.on{display:block}
 .stat{font-size:13px;color:var(--gray);line-height:1.6}
 .stat b{color:var(--text);font-weight:700}
+
+/* --- belt capture: cascades, checks, chips --- */
+.sublab{font-size:11px;font-weight:400;text-transform:none;letter-spacing:0;color:var(--gray);margin-bottom:4px}
+.auto{display:inline-block;font-size:9px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;
+  padding:2px 6px;border-radius:99px;background:var(--cyan-tint);color:var(--action);margin-left:6px;vertical-align:middle}
+.auto.off{display:none}
+.gap{height:10px}
+.chips{display:flex;flex-wrap:wrap;gap:7px}
+.chips button{padding:9px 13px;border:1px solid var(--line2);border-radius:99px;background:#fff;
+  color:var(--gray);font-size:13px;font-family:var(--sans)}
+.chips button.on{background:var(--cyan-tint);border-color:var(--cyan);color:var(--action);font-weight:700}
+.chk{display:flex;align-items:flex-start;gap:8px;font-size:13px;color:var(--gray);
+  text-transform:none;letter-spacing:0;font-weight:400;margin:0 0 4px;line-height:1.4}
+.chk input{width:18px;height:18px;flex:none;margin-top:1px;accent-color:var(--focus)}
+.msg{display:none;font-size:12.5px;line-height:1.45;margin-top:8px;padding:8px 10px;border-radius:4px;border-left:3px solid}
+.msg.show{display:block}
+.msg.ok{background:#F1F8F2;border-color:var(--ok);color:#1B5F28}
+.msg.warn{background:#FFF6EC;border-color:var(--warn);color:#8A4B00}
+.msg.info{background:var(--cyan-tint);border-color:var(--cyan);color:var(--action)}
+.msg b{font-weight:700}
+.msg .lnk{color:var(--link);text-decoration:underline;cursor:pointer;font-weight:700}
+input.alert,select.alert{border-color:var(--danger);box-shadow:0 0 0 2px rgba(178,35,47,.14)}
+.hide{display:none}
+.sec{margin-bottom:10px}
+.linkbtn{background:none;border:none;color:var(--link);font-size:13px;font-weight:700;
+  font-family:var(--sans);padding:10px 2px;text-align:left;text-decoration:underline}
 </style>
 </head>
 <body>
@@ -107,16 +133,31 @@ button.ghost{width:100%;padding:13px 0;border:1px solid var(--line2);border-radi
     <button data-go="newcall"><b>New call</b><span>Search account</span></button>
     <button data-go="resume"><b>Resume call</b><span id="resumeInfo">None open</span></button>
   </div>
-  <h2>Data</h2>
+  <p class="msg" id="homeSetup"></p>
+  <h2>Past calls</h2>
+  <div id="pastList"><p class="empty">No saved calls.</p></div>
+  <button class="linkbtn" data-go="data">Data &amp; setup</button>
+</section>
+
+<!-- DATA AND SETUP -->
+<section class="scr" id="s-data">
+  <p class="hint">Both files are read on this phone and stored here. Nothing is uploaded, and neither file
+    lives in the app itself &mdash; you only need to do this once, or again when a source file changes.</p>
+  <h2>Contact database</h2>
   <div class="fld">
-    <label>Contact database</label>
     <p class="stat" id="dbStat">No data loaded.</p>
     <input type="file" id="xlsxFile" accept=".xlsx" style="margin-top:10px">
     <button class="ghost" id="importBtn">Import Dynamics export</button>
-    <p class="hint">Export the ANZ Active Food Contacts view from Dynamics as .xlsx, then import it here. Data stays on this phone.</p>
+    <p class="hint">Export the ANZ Active Food Contacts view from Dynamics as .xlsx, then import it here.</p>
   </div>
-  <h2>Past calls</h2>
-  <div id="pastList"><p class="empty">No saved calls.</p></div>
+  <h2>Belt reference data</h2>
+  <div class="fld">
+    <p class="stat" id="refStat">No data loaded.</p>
+    <input type="file" id="refFile" accept=".xlsm,.xlsx" style="margin-top:10px">
+    <button class="ghost" id="refBtn">Import plant audit workbook</button>
+    <p class="hint">Plant_Audit_Template_1.xlsm. This is the bigger of the two files &mdash; the app will
+      sit still for a few seconds while it reads. Leave the screen on until it says it is done.</p>
+  </div>
 </section>
 
 <!-- ACCOUNT SEARCH -->
@@ -199,26 +240,156 @@ button.ghost{width:100%;padding:13px 0;border:1px solid var(--line2);border-radi
     <input type="text" id="bAsset" placeholder="61-156 boning line 2">
     <p class="err" id="bErr">Enter an asset no. or line description first</p>
   </div>
-  <div class="fld"><label>Belt description</label><input type="text" id="bDesc" placeholder="S800OHFT"></div>
+
+  <h2>Belt data</h2>
+  <p class="msg" id="refWarn"></p>
+  <div class="fld" id="bCopyWrap">
+    <label>Copy spec from a belt already logged</label>
+    <select id="bCopy"><option value="">Start from blank</option></select>
+  </div>
   <div class="fld">
-    <div class="row">
-      <div><label>Belt width (mm)</label><input type="text" id="bWidth" inputmode="decimal" placeholder="606"></div>
-      <div><label>Centre line length (m)</label><input type="text" id="bClen" inputmode="decimal" placeholder="9"></div>
-    </div>
+    <label>Belt description</label>
+    <input type="text" id="bDesc" placeholder="S800OHFT">
+    <p class="hint">Shorthand as you would write it. The pickers below are the detail behind it.</p>
   </div>
   <div class="fld">
     <div class="row">
-      <div><label>Belt material</label><select id="bMat"><option>PP</option><option>PK</option><option>AC</option><option>PE</option><option selected>Unknown</option></select></div>
-      <div><label>Rod material</label><select id="bRod"><option>PP</option><option>PK</option><option>AC</option><option>PE</option><option>N/A</option><option selected>Unknown</option></select></div>
+      <div><label>Series</label><select id="bSeries"></select></div>
+      <div><label>Style</label><select id="bStyle" disabled><option value="">Select series first</option></select></div>
     </div>
+    <div class="gap"></div>
+    <div class="row">
+      <div><label>Material</label><select id="bMat" disabled><option value="">Select style first</option></select></div>
+      <div><label>Colour</label><select id="bColour" disabled><option value="">Select material first</option></select></div>
+    </div>
+  </div>
+  <div class="fld">
+    <label>Rod material</label>
+    <div class="chips" id="bRodChips"></div>
+    <input type="text" id="bRodOther" class="hide" placeholder="Rod material (other)" style="margin-top:8px">
+  </div>
+  <div class="fld">
+    <div class="row">
+      <div><label>Conveyor length (m)</label><input type="number" id="bCvLen" inputmode="decimal" step="0.01" placeholder="9"></div>
+      <div><label>Inside frame width (mm)</label><input type="number" id="bFrame" inputmode="decimal" step="1"></div>
+    </div>
+    <div class="gap"></div>
+    <div class="row">
+      <div><label>Belt width (mm)</label><input type="number" id="bWidth" inputmode="decimal" step="1" placeholder="606"></div>
+      <div>
+        <label>Belt length (m) <span class="auto" id="bLenAuto">estimated</span></label>
+        <input type="number" id="bLen" inputmode="decimal" step="0.01">
+      </div>
+    </div>
+    <p class="msg" id="bFrameMsg"></p>
+    <p class="msg" id="bWidthMsg"></p>
   </div>
   <div class="fld">
     <label>Retrofit</label>
     <div class="seg" id="bRetro"><button type="button" data-v="Y">Y</button><button type="button" data-v="N">N</button></div>
   </div>
-  <div class="fld"><label>Sprocket details</label><input type="text" id="bSprk" placeholder="S40 8T"></div>
-  <h2>Flights</h2>
-  <div id="flightWrap"></div>
+
+  <h2>Sprocket data</h2>
+  <div class="fld">
+    <label class="chk"><input type="checkbox" id="bSkipSpr"> Skip &mdash; sprockets not assessed or not applicable</label>
+    <div id="bSprBody">
+      <div class="gap"></div>
+      <label>Bore <span class="auto">defaults to 40 mm square</span></label>
+      <select id="bSprBore"></select>
+      <div class="gap"></div>
+      <label>Pitch diameter and tooth count</label>
+      <select id="bSprPd" disabled><option value="">Select bore first</option></select>
+      <div class="gap"></div>
+      <label>Material</label>
+      <select id="bSprMat" disabled><option value="">Select pitch diameter first</option></select>
+      <div id="bSprVarWrap" class="hide">
+        <div class="gap"></div>
+        <label>Build type or variant</label>
+        <select id="bSprVar"></select>
+      </div>
+      <div class="gap"></div>
+      <label>Description <span class="auto" id="bSprDescAuto">auto-filled</span></label>
+      <input type="text" id="bSprDesc" placeholder="S40 8T, or leave to the picker">
+      <div class="gap"></div>
+      <label>Part number <span class="auto" id="bSprPnAuto">auto-filled</span></label>
+      <input type="text" id="bSprPn">
+      <div class="gap"></div>
+      <div class="row">
+        <div>
+          <label>Drive qty <span class="auto" id="bSprDrvAuto">from width</span></label>
+          <input type="number" id="bSprDrive" inputmode="numeric">
+        </div>
+        <div>
+          <label>Idle qty <span class="auto" id="bSprIdlAuto">from width</span></label>
+          <input type="number" id="bSprIdle" inputmode="numeric">
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <h2>Flights and sideguards</h2>
+  <div class="fld">
+    <label class="chk"><input type="checkbox" id="bSkipAcc" checked> Skip &mdash; no flights, sideguards or indent on this belt</label>
+    <div id="bAccBody" class="hide">
+      <div class="gap"></div>
+      <div class="row">
+        <div>
+          <label>Flight type</label>
+          <select id="bFlType"></select>
+        </div>
+        <div>
+          <label>Flight material <span class="auto" id="bFlMatAuto">matches belt</span></label>
+          <select id="bFlMat"></select>
+        </div>
+      </div>
+      <input type="text" id="bFlTypeOther" class="hide" placeholder="Flight type (other)" style="margin-top:8px">
+      <div class="gap"></div>
+      <label>Flight height (mm)</label>
+      <input type="number" id="bFlHeight" inputmode="decimal" step="0.1">
+      <div class="gap"></div>
+      <label>Flight spacing</label>
+      <div class="row">
+        <div>
+          <div class="sublab">Every N rows</div>
+          <input type="number" id="bFlRows" inputmode="numeric" step="1" min="1" placeholder="10">
+        </div>
+        <div>
+          <div class="sublab">Millimetres</div>
+          <input type="number" id="bFlMm" inputmode="decimal" step="0.1" placeholder="508">
+        </div>
+      </div>
+      <p class="msg" id="bPitchMsg"></p>
+      <div class="gap"></div>
+      <div class="row">
+        <div>
+          <label>Indent (mm)</label>
+          <select id="bIndent"></select>
+        </div>
+        <div>
+          <label>Centre notch (mm)</label>
+          <input type="text" id="bNotch" placeholder="25 or 25/51">
+        </div>
+      </div>
+      <input type="text" id="bIndentOther" class="hide" placeholder="Indent (other)" style="margin-top:8px">
+      <p class="msg" id="bIndentMsg"></p>
+      <div class="gap"></div>
+      <div class="row">
+        <div>
+          <label>Sideguard type</label>
+          <select id="bSgType"></select>
+        </div>
+        <div>
+          <label>Sideguard material</label>
+          <select id="bSgMat"></select>
+        </div>
+      </div>
+      <input type="text" id="bSgTypeOther" class="hide" placeholder="Sideguard type (other)" style="margin-top:8px">
+      <div class="gap"></div>
+      <label>Sideguard height (mm)</label>
+      <input type="text" id="bSgHeight">
+    </div>
+  </div>
+
   <h2>Quote contact</h2>
   <div class="fld">
     <label>Only if different to the call contacts</label>
