@@ -183,16 +183,16 @@ input.alert,select.alert{border-color:var(--danger);box-shadow:0 0 0 2px rgba(17
     <div class="gap"></div>
     <label>Pages to keep as images</label>
     <select id="manMode">
-      <option value="datasheets">Datasheet pages only &mdash; smallest</option>
-      <option value="series" selected>Whole series sections &mdash; recommended</option>
-      <option value="full">Every page &mdash; largest</option>
+      <option value="series" selected>Series sections only &mdash; recommended</option>
+      <option value="full">Every page in the manual &mdash; largest</option>
     </select>
     <input type="file" id="manFile" accept=".pdf,application/pdf" style="margin-top:10px">
     <button class="ghost" id="manBtn">Import engineering manual</button>
     <p class="msg" id="manMsg"></p>
     <p class="hint">One manual at a time. Import the MPB manual, wait for it to finish, then the
       ThermoDrive one. Each takes several minutes and needs the screen left on &mdash; every page is
-      read and turned into an image so it works with no reception afterwards.
+      read and turned into an image so it works with no reception afterwards. Series sections
+      cover every page the manual gives to a belt series &mdash; enough for a site call.
       The first import needs a connection once, to fetch the PDF reader.</p>
   </div>
 </section>
@@ -503,18 +503,18 @@ input.alert,select.alert{border-color:var(--danger);box-shadow:0 0 0 2px rgba(17
 <section class="scr" id="s-manuals">
   <div class="fld">
     <label>Search</label>
-    <input type="search" id="mQ" placeholder="Series, style or any term" autocomplete="off">
+    <input type="search" id="mQ" placeholder="Series number, or any term" autocomplete="off">
     <p class="hint" id="mHint"></p>
   </div>
   <div class="seg" id="mSeg">
     <button type="button" data-seg="search" class="on">Search</button>
-    <button type="button" data-seg="browse">Browse series</button>
+    <button type="button" data-seg="browse">All series</button>
   </div>
   <p class="msg" id="mMsg"></p>
   <div id="mBody"></div>
   <div class="fld" id="mSelBar" style="display:none">
     <p class="stat" id="mSelN"></p>
-    <button class="big" id="mShare">Share selected pages</button>
+    <button class="big" id="mShare">Share selected sections</button>
     <button class="ghost" id="mClear">Clear selection</button>
   </div>
 </section>
@@ -528,7 +528,7 @@ input.alert,select.alert{border-color:var(--danger);box-shadow:0 0 0 2px rgba(17
   <h2>Customer documentation</h2>
   <div class="fld">
     <label class="chk"><input type="checkbox" id="optSpec" checked disabled> Belt specification</label>
-    <label class="chk"><input type="checkbox" id="optDatasheet"> Include technical data sheet</label>
+    <label class="chk"><input type="checkbox" id="optDatasheet"> Include the manual section for each belt series</label>
     <p class="msg" id="dsMsg"></p>
   </div>
   <button class="big" id="doShare">Generate and share</button>
@@ -557,7 +557,7 @@ input.alert,select.alert{border-color:var(--danger);box-shadow:0 0 0 2px rgba(17
   <div class="mvbody"><img id="mvImg" alt=""></div>
   <div class="mvnav">
     <button type="button" id="mvPrev">Previous</button>
-    <button type="button" id="mvShare" class="pri">Share page</button>
+    <button type="button" id="mvShare" class="pri">Share section</button>
     <button type="button" id="mvNext">Next</button>
   </div>
 </div>

@@ -1374,15 +1374,16 @@ function renderCompileStat(){
    arrives with no data sheet should say why. */
 async function datasheetPlan(){
   const belts = call.entries.filter(e=>e.type==='belt');
-  const plan = { pages:[], covered:[], missing:[], byPage:{} };
+  const plan = { pages:[], covered:[], missing:[], byPage:{}, series:{} };
   if(!window.Manuals || !belts.length) return plan;
   for(const b of belts){
     if(!b.series){ plan.missing.push(b.asset||'a belt with no series'); continue; }
     let hits = [];
-    try { hits = await Manuals.pagesForSeries(b.series, b.style); }
+    try { hits = await Manuals.pagesForSeries(b.series); }
     catch(e){ console.error('datasheet lookup', e); }
     if(!hits.length){ plan.missing.push((b.asset||'belt')+' (series '+b.series+')'); continue; }
     plan.covered.push(b.asset||('series '+b.series));
+    plan.series[b.series] = true;
     hits.forEach(h=>{
       const k = h.manual+':'+h.page;
       if(!plan.byPage[k]){ plan.byPage[k] = []; plan.pages.push(k); }
@@ -1417,8 +1418,10 @@ async function renderDatasheetOption(){
       : 'Log a belt first.');
     return;
   }
-  const bits = [plan.pages.length+' page'+(plan.pages.length===1?'':'s')+' for '+
-    plan.covered.length+' belt'+(plan.covered.length===1?'':'s')+'.'];
+  const ser = Object.keys(plan.series);
+  const bits = ['Series '+esc(ser.join(', '))+' '+String.fromCharCode(8212)+' '+
+    plan.pages.length+' manual page'+(plan.pages.length===1?'':'s')+
+    ', roughly '+Math.round(plan.pages.length*0.12)+' MB added to the file.'];
   if(plan.missing.length) bits.push('No manual section for '+esc(plan.missing.join(', '))+'.');
   showMsg(msg, plan.missing.length ? 'warn' : 'ok', bits.join(' '));
 }
@@ -1434,10 +1437,11 @@ function buildNotesHTML(datasheets){
     'th{background:#E3F0F5;text-align:left;padding:6px 8px;border:1px solid #ACD3E1;font-weight:bold;color:#222222}'+
     'td{padding:6px 8px;border:1px solid #CCCCCC;vertical-align:top}'+
     'td.l{background:#F7F8F8;width:38%;font-weight:bold}.flag{color:#B2232F;font-weight:bold}'+
-    '.ds{page-break-inside:avoid;margin:0 0 22px}.ds .cap{font-size:10pt;color:#4D4D4F;'+
-    'border-bottom:2px solid #E3F0F5;padding-bottom:4px;margin-bottom:7px}'+
-    '.ds img{max-width:100%;height:auto;border:1px solid #CCCCCC;display:block}'+
-    '.ds .src{font-size:8.5pt;color:#4D4D4F;margin-top:4px}'+
+    '.grp{margin:0 0 20px}.cap{font-size:11.5pt;color:#4D4D4F;'+
+    'border-bottom:2px solid #E3F0F5;padding-bottom:4px;margin-bottom:4px}'+
+    '.grp .pg{page-break-inside:avoid;margin:8px 0 14px}'+
+    '.grp .pg img{max-width:100%;height:auto;border:1px solid #CCCCCC;display:block}'+
+    '.src{font-size:8.5pt;color:#4D4D4F;margin-top:4px}'+
     '.note{font-size:8.5pt;color:#4D4D4F;border-top:1px solid #E3E3E3;margin:14px 0 20px;padding-top:8px}'+
     '.blk{page-break-inside:avoid}.ph{margin:6px 0 14px}.ph img{max-width:420px;border:1px solid #CCCCCC;margin:0 8px 8px 0}'+
     '.ft{margin-top:24px;padding-top:8px;border-top:3px solid #ED1C24;color:#4D4D4F;font-size:9pt}';
@@ -1545,7 +1549,7 @@ async function datasheetSection(){
   if(!built.count) return '';
   const inner = built.html.replace(/^[\s\S]*?<div class="rule"><\/div>/, '')
                           .replace(/<\/body><\/html>\s*$/, '');
-  return '<h2>Technical data</h2>'+inner.replace(/class="pg"/g, 'class="ds"');
+  return '<h2>Technical data</h2>'+inner;
 }
 
 async function compileHTML(){

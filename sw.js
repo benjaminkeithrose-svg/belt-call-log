@@ -1,4 +1,4 @@
-const CACHE = 'beltcall-v12';
+const CACHE = 'beltcall-v13';
 
 // Local files first. If one of these fails the app still installs, but note the warning.
 const ASSETS = [
