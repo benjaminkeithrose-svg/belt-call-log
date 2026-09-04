@@ -96,6 +96,8 @@ button.ghost{width:100%;padding:13px 0;border:1px solid var(--line2);border-radi
 .chips button{padding:9px 13px;border:1px solid var(--line2);border-radius:99px;background:#fff;
   color:var(--gray);font-size:13px;font-family:var(--sans)}
 .chips button.on{background:var(--cyan-tint);border-color:var(--cyan);color:var(--action);font-weight:700}
+.chips button.top{border-color:var(--cyan);color:var(--action)}
+.chips .none{font-size:13px;color:var(--faint);font-style:italic;padding:9px 0}
 .chk{display:flex;align-items:flex-start;gap:8px;font-size:13px;color:var(--gray);
   text-transform:none;letter-spacing:0;font-weight:400;margin:0 0 4px;line-height:1.4}
 .chk input{width:18px;height:18px;flex:none;margin-top:1px;accent-color:var(--focus)}
@@ -257,11 +259,15 @@ input.alert,select.alert{border-color:var(--danger);box-shadow:0 0 0 2px rgba(17
       <div><label>Series</label><select id="bSeries"></select></div>
       <div><label>Style</label><select id="bStyle" disabled><option value="">Select series first</option></select></div>
     </div>
+  </div>
+  <div class="fld">
+    <label>Material</label>
+    <div class="chips" id="bMatChips"></div>
+    <input type="text" id="bMatOther" class="hide" placeholder="Material (other)" style="margin-top:8px">
     <div class="gap"></div>
-    <div class="row">
-      <div><label>Material</label><select id="bMat" disabled><option value="">Select style first</option></select></div>
-      <div><label>Colour</label><select id="bColour" disabled><option value="">Select material first</option></select></div>
-    </div>
+    <label>Colour</label>
+    <div class="chips" id="bColourChips"></div>
+    <input type="text" id="bColourOther" class="hide" placeholder="Colour (other)" style="margin-top:8px">
   </div>
   <div class="fld">
     <label>Rod material</label>

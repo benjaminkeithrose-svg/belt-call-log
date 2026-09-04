@@ -612,6 +612,97 @@ $('closeCall').addEventListener('click', async ()=>{
 $('toCompile').addEventListener('click', ()=>go('compile'));
 $('barMenu').addEventListener('click', ()=>go('dash'));
 
+/* ---------- what you reach for most ----------
+   The workbook lists everything alphabetically and carries no notion of what is common,
+   so the ordering has to come from here. Every saved belt bumps a counter for each value
+   picked, held against the context it was picked in: style counts sit under the series,
+   material counts under series|style, and so on. Ranking then reads the specific context
+   first and falls back to how often the value has been used anywhere, so a material you
+   reach for constantly still floats in a series you have not logged before.
+   Counts live on this phone only, alongside everything else. */
+let USE = null;
+const CTX_ALL = '*';
+
+async function loadUse(){
+  USE = (await kvGet('usage')) || {};
+  return USE;
+}
+function bump(field, ctx, value){
+  if(!value) return;
+  USE = USE || {};
+  const f = USE[field] = USE[field] || {};
+  [ctx || '', CTX_ALL].forEach(k => {
+    const c = f[k] = f[k] || {};
+    c[value] = (c[value] || 0) + 1;
+  });
+}
+function counts(field, ctx){
+  return (USE && USE[field] && USE[field][ctx || '']) || {};
+}
+/* Most used first, then everything else in the workbook's alphabetical order. */
+function rank(values, field, ctx){
+  const here = counts(field, ctx), any = counts(field, CTX_ALL);
+  const base = uniqSort(values);
+  const scored = base.map((v, i) => ({v, i, n:here[v] || 0, g:any[v] || 0}));
+  scored.sort((a, b) => (b.n - a.n) || (b.g - a.g) || (a.i - b.i));
+  const top = scored.filter(x => x.n > 0 || x.g > 0).map(x => x.v);
+  const rest = scored.filter(x => !(x.n > 0 || x.g > 0)).map(x => x.v);
+  return {all: top.concat(rest), top, rest};
+}
+async function saveUse(){ try { await kvSet('usage', USE); } catch(e){ console.warn('usage', e); } }
+
+/* ---------- chip groups ----------
+   Same control as the rod material chips, but rebuilt whenever the cascade above them
+   changes, since the valid materials and colours depend on the series and style. */
+const chipSel = {};
+function renderChips(id, values, o){
+  const el = $(id);
+  if(!el) return;
+  o = o || {};
+  const cur = chipSel[id] || '';
+  if(!values.length){
+    el.innerHTML = '<span class="none">'+esc(o.empty || 'Nothing to choose yet')+'</span>';
+    if(o.other) $(o.other).classList.add('hide');
+    return;
+  }
+  const r = rank(values, o.field, o.ctx);
+  el.innerHTML = r.all.map(v =>
+      '<button type="button" data-v="'+esc(v)+'"'+(r.top.includes(v) ? ' class="top"' : '')+'>'+esc(v)+'</button>').join('') +
+    (o.other ? '<button type="button" data-v="OTHER">Other...</button>' : '');
+  el.querySelectorAll('button').forEach(b => b.addEventListener('click', () => {
+    const was = b.classList.contains('on');
+    el.querySelectorAll('button').forEach(x => x.classList.remove('on'));
+    chipSel[id] = '';
+    if(!was){ b.classList.add('on'); chipSel[id] = b.dataset.v; }
+    if(o.other) $(o.other).classList.toggle('hide', chipSel[id] !== 'OTHER');
+    if(o.onPick) o.onPick();
+  }));
+  /* keep the current pick if it survived the rebuild, so changing style does not
+     silently drop a material that is still valid */
+  if(cur && (r.all.includes(cur) || cur === 'OTHER')) setChip(id, cur, o.other);
+  else { chipSel[id] = ''; if(o.other) $(o.other).classList.add('hide'); }
+}
+function chipValue(id, otherId){
+  const v = chipSel[id] || '';
+  return (v === 'OTHER' && otherId) ? $(otherId).value.trim() : v;
+}
+function setChip(id, v, otherId){
+  const el = $(id);
+  el.querySelectorAll('button').forEach(x => x.classList.remove('on'));
+  chipSel[id] = '';
+  if(!v) { if(otherId) $(otherId).classList.add('hide'); return true; }
+  const hit = [...el.querySelectorAll('button')].find(x => x.dataset.v === v);
+  if(hit){ hit.classList.add('on'); chipSel[id] = v; if(otherId) $(otherId).classList.add('hide'); return true; }
+  const other = [...el.querySelectorAll('button')].find(x => x.dataset.v === 'OTHER');
+  if(other && otherId){
+    other.classList.add('on'); chipSel[id] = 'OTHER';
+    $(otherId).classList.remove('hide'); $(otherId).value = v;
+    return true;
+  }
+  return false;
+}
+function clearChip(id, otherId){ setChip(id, '', otherId); if(otherId) $(otherId).value = ''; }
+
 /* ---------- entry: belt ----------
    Mirrors the plant audit line entry form: the same Series > Style > Material > Colour
    cascade, the same width and frame checks off the link geometry, the same sprocket
@@ -622,11 +713,18 @@ $('barMenu').addEventListener('click', ()=>go('dash'));
 const DEFAULT_BORE = '40 mm square';
 const FALLBACK_ROD = ['ACETAL','POLYPROPYLENE','POLYETHYLENE','PK','NYLON'];
 
-function populateSel(el, values, placeholder, withOther){
+function populateSel(el, values, placeholder, withOther, field, ctx){
   if(!el) return;
-  el.innerHTML = '<option value="">'+esc(placeholder)+'</option>' +
-    values.map(v => '<option value="'+esc(v)+'">'+esc(v)+'</option>').join('') +
-    (withOther ? '<option value="OTHER">Other...</option>' : '');
+  const opt = v => '<option value="'+esc(v)+'">'+esc(v)+'</option>';
+  const tail = withOther ? '<option value="OTHER">Other...</option>' : '';
+  const head = '<option value="">'+esc(placeholder)+'</option>';
+  if(!field){ el.innerHTML = head + uniqSort(values).map(opt).join('') + tail; return; }
+  const r = rank(values, field, ctx);
+  /* split rather than silently reorder, so nothing looks like it has gone missing */
+  el.innerHTML = head +
+    (r.top.length ? '<optgroup label="Most used">'+r.top.map(opt).join('')+'</optgroup>' : '') +
+    (r.rest.length ? (r.top.length ? '<optgroup label="All">'+r.rest.map(opt).join('')+'</optgroup>'
+                                   : r.rest.map(opt).join('')) : '') + tail;
 }
 function keepValue(el, prev){
   if(prev && [...el.options].some(o => o.value === prev)) el.value = prev;
@@ -654,78 +752,81 @@ function buildBeltRef(){
   const R = REF || {combos:[], geom:[], sprockets:[], pitch:{}, indentGroups:[],
                     materials:[], colours:[], rods:[], flightTypes:[], sideguardTypes:[]};
 
-  populateSel($('bSeries'), uniqSort(R.combos.map(c=>c[0])),
-    R.combos.length ? 'Select series...' : 'Import reference data');
+  populateSel($('bSeries'), R.combos.map(c=>c[0]),
+    R.combos.length ? 'Select series...' : 'Import reference data', false, 'series', '');
 
   const mats = R.materials.length ? R.materials : uniqSort(R.combos.map(c=>c[2]));
-  populateSel($('bFlMat'), mats, 'Select flight material...');
-  populateSel($('bSgMat'), mats, 'Select sideguard material...');
-  populateSel($('bFlType'), R.flightTypes, 'Select flight type...', true);
-  populateSel($('bSgType'), R.sideguardTypes, 'Select sideguard type...', true);
+  populateSel($('bFlMat'), mats, 'Select flight material...', false, 'flmat', '');
+  populateSel($('bSgMat'), mats, 'Select sideguard material...', false, 'sgmat', '');
+  populateSel($('bFlType'), R.flightTypes, 'Select flight type...', true, 'fltype', '');
+  populateSel($('bSgType'), R.sideguardTypes, 'Select sideguard type...', true, 'sgtype', '');
 
-  const rods = R.rods.length ? R.rods : FALLBACK_ROD;
-  const chips = $('bRodChips');
-  chips.innerHTML = rods.map(v => '<button type="button" data-rod="'+esc(v)+'">'+esc(v)+'</button>').join('') +
-    '<button type="button" data-rod="OTHER">Other...</button>';
-  chips.querySelectorAll('button').forEach(b => b.addEventListener('click', () => {
-    const was = b.classList.contains('on');
-    chips.querySelectorAll('button').forEach(x => x.classList.remove('on'));
-    if(!was) b.classList.add('on');
-    $('bRodOther').classList.toggle('hide', !(b.dataset.rod === 'OTHER' && !was));
-  }));
+  renderChips('bRodChips', R.rods.length ? R.rods : FALLBACK_ROD,
+    {field:'rod', ctx:'', other:'bRodOther', empty:'Import reference data'});
 
+  renderMatChips();
   populateSprBores();
   populateIndent();
   updatePitch();
 }
-function rodValue(){
-  const on = $('bRodChips').querySelector('button.on');
-  if(!on) return '';
-  return on.dataset.rod === 'OTHER' ? $('bRodOther').value.trim() : on.dataset.rod;
+const rodValue = () => chipValue('bRodChips', 'bRodOther');
+const beltMat = () => chipValue('bMatChips', 'bMatOther');
+const beltColour = () => chipValue('bColourChips', 'bColourOther');
+
+/* Material depends on series and style, colour on all three, so both are rebuilt
+   every time something above them moves. */
+function renderMatChips(){
+  const s = serSel().value, st = stySel().value;
+  const vals = (s && st) ? combos().filter(c=>c[0]===s && c[1]===st).map(c=>c[2]) : [];
+  renderChips('bMatChips', vals, {
+    field:'material', ctx:s+'|'+st, other:'bMatOther',
+    empty: st ? 'No materials on file' : 'Pick a series and style first',
+    onPick: onMaterial
+  });
+  renderColourChips();
+}
+function renderColourChips(){
+  const s = serSel().value, st = stySel().value, m = beltMat();
+  const vals = (s && st && m) ? combos().filter(c=>c[0]===s && c[1]===st && c[2]===m).map(c=>c[3]) : [];
+  renderChips('bColourChips', vals, {
+    field:'colour', ctx:s+'|'+st+'|'+m, other:'bColourOther',
+    empty: m ? 'No colours on file' : 'Pick a material first',
+    onPick: runWidthCheck
+  });
 }
 
 /* ---------- Series > Style > Material > Colour ---------- */
-const serSel = () => $('bSeries'), stySel = () => $('bStyle'),
-      matSel = () => $('bMat'), colSel = () => $('bColour');
+const serSel = () => $('bSeries'), stySel = () => $('bStyle');
 const combos = () => (REF ? REF.combos : []);
 
-function onSeries(reset){
+function onSeries(){
   const s = serSel().value;
-  const styles = uniqSort(combos().filter(c=>c[0]===s).map(c=>c[1]));
-  populateSel(stySel(), styles, styles.length ? 'Select style...' : 'No styles on file');
+  populateSel(stySel(), combos().filter(c=>c[0]===s).map(c=>c[1]),
+    s ? 'Select style...' : 'Select series first', false, 'style', s);
   stySel().disabled = !s;
-  if(reset !== false){
-    populateSel(matSel(), [], 'Select style first'); matSel().disabled = true;
-    populateSel(colSel(), [], 'Select material first'); colSel().disabled = true;
-  }
+  renderMatChips();
   runWidthCheck();
   populateSprBores();
   const p = pitchMm(), rows = parseFloat($('bFlRows').value);
   if(p && rows > 0) $('bFlMm').value = round1(rows * p);
   updatePitch();
 }
-function onStyle(reset){
-  const s = serSel().value, st = stySel().value;
-  const ms = uniqSort(combos().filter(c=>c[0]===s && c[1]===st).map(c=>c[2]));
-  populateSel(matSel(), ms, ms.length ? 'Select material...' : 'No materials on file');
-  matSel().disabled = !st;
-  if(reset !== false){ populateSel(colSel(), [], 'Select material first'); colSel().disabled = true; }
+function onStyle(){
+  renderMatChips();
   runWidthCheck();
   populateIndent();
 }
 function onMaterial(){
-  const s = serSel().value, st = stySel().value, m = matSel().value;
-  const cs = uniqSort(combos().filter(c=>c[0]===s && c[1]===st && c[2]===m).map(c=>c[3]));
-  populateSel(colSel(), cs, cs.length ? 'Select colour...' : 'No colours on file');
-  colSel().disabled = !m;
+  renderColourChips();
   runWidthCheck();
   syncFlightMaterial();
 }
 function setCascade(s, st, m, c){
-  serSel().value = s || ''; onSeries(false);
-  stySel().value = st || ''; onStyle(false);
-  matSel().value = m || ''; onMaterial();
-  colSel().value = c || '';
+  serSel().value = s || ''; onSeries();
+  stySel().value = st || ''; onStyle();
+  setChip('bMatChips', m || '', 'bMatOther'); renderColourChips();
+  setChip('bColourChips', c || '', 'bColourOther');
+  syncFlightMaterial();
   runWidthCheck();
 }
 
@@ -735,7 +836,7 @@ function setCascade(s, st, m, c){
    can actually be built and flag anything landing between them. */
 function runWidthCheck(){
   const el = $('bWidthMsg');
-  const s = serSel().value, st = stySel().value, m = matSel().value;
+  const s = serSel().value, st = stySel().value, m = beltMat();
   const w = parseFloat($('bWidth').value);
   showMsg(el, '', '');
   if(!REF || !s || !st || !m || isNaN(w) || w <= 0) return;
@@ -781,7 +882,8 @@ const sprPool = () => {
 function populateSprBores(){
   const el = $('bSprBore'), prev = el.value;
   const bores = uniqSort(sprPool().map(x => x[1]));
-  populateSel(el, bores, bores.length ? 'Select bore...' : 'No sprockets for this series');
+  populateSel(el, bores, bores.length ? 'Select bore...' : 'No sprockets for this series',
+    false, 'sprbore', serSel().value);
   if(bores.includes(prev)) el.value = prev;
   else if(bores.includes(DEFAULT_BORE)) el.value = DEFAULT_BORE;
   onSprBore(false);
@@ -789,7 +891,8 @@ function populateSprBores(){
 function onSprBore(reset){
   const b = $('bSprBore').value;
   const pds = uniqSort(sprPool().filter(x => x[1]===b).map(x => x[2]));
-  populateSel($('bSprPd'), pds, pds.length ? 'Select pitch diameter...' : 'No data for this bore');
+  populateSel($('bSprPd'), pds, pds.length ? 'Select pitch diameter...' : 'No data for this bore',
+    false, 'sprpd', serSel().value+'|'+b);
   $('bSprPd').disabled = !b;
   if(reset !== false){ populateSel($('bSprMat'), [], 'Select pitch diameter first'); $('bSprMat').disabled = true; }
   matchSprocket();
@@ -797,7 +900,8 @@ function onSprBore(reset){
 function onSprPd(){
   const b = $('bSprBore').value, p = $('bSprPd').value;
   const ms = uniqSort(sprPool().filter(x => x[1]===b && x[2]===p).map(x => x[3]));
-  populateSel($('bSprMat'), ms, ms.length ? 'Select material...' : 'No data for this pitch');
+  populateSel($('bSprMat'), ms, ms.length ? 'Select material...' : 'No data for this pitch',
+    false, 'sprmat', serSel().value+'|'+b+'|'+p);
   $('bSprMat').disabled = !p;
   onSprMat();
 }
@@ -847,7 +951,7 @@ function updateSprQty(){
 let flMatTouched = false;
 function syncFlightMaterial(){
   if(flMatTouched) return;
-  const m = matSel().value;
+  const m = beltMat();
   if(!m) return;
   const sel = $('bFlMat');
   if(![...sel.options].some(o => o.value === m)){
@@ -921,9 +1025,13 @@ function populateIndent(){
     return;
   }
   const use = shown.length ? shown : groups;
+  const opt = v => '<option value="'+esc(v)+'">'+esc(v)+'</option>';
+  const pool = use.reduce((a, g) => a.concat(g[1]), []);
+  const top = rank(pool, 'indent', serSel().value+'|'+stySel().value).top;
   sel.innerHTML = '<option value="">Select indent...</option>' +
+    (top.length ? '<optgroup label="Most used">'+top.map(opt).join('')+'</optgroup>' : '') +
     use.map(([l, vals]) => '<optgroup label="'+esc(l)+'">' +
-      vals.map(v => '<option value="'+esc(v)+'">'+esc(v)+'</option>').join('') + '</optgroup>').join('') +
+      vals.map(opt).join('') + '</optgroup>').join('') +
     '<option value="OTHER">Other...</option>';
   keepValue(sel, prev);
   $('bIndentOther').classList.toggle('hide', sel.value !== 'OTHER');
@@ -943,9 +1051,8 @@ function wireIndentToggle(){
 let flightType, sgType, indentValue;
 
 /* ---------- wiring ---------- */
-serSel().addEventListener('change', () => onSeries());
-stySel().addEventListener('change', () => onStyle());
-matSel().addEventListener('change', onMaterial);
+serSel().addEventListener('change', onSeries);
+stySel().addEventListener('change', onStyle);
 $('bWidth').addEventListener('input', () => { runWidthCheck(); runFrameCheck(); updateSprQty(); });
 $('bFrame').addEventListener('input', runFrameCheck);
 $('bSprBore').addEventListener('change', () => onSprBore());
@@ -1020,14 +1127,7 @@ $('bCopy').addEventListener('change', () => {
   if(!b) return;
   $('bDesc').value = b.beltdesc || '';
   setCascade(b.series, b.style, b.beltmat, b.colour);
-  const chips = $('bRodChips');
-  chips.querySelectorAll('button').forEach(x => x.classList.remove('on'));
-  const chip = [...chips.querySelectorAll('button')].find(x => x.dataset.rod === b.rodmat);
-  if(chip) chip.classList.add('on');
-  else if(b.rodmat){
-    const o = [...chips.querySelectorAll('button')].find(x => x.dataset.rod === 'OTHER');
-    if(o){ o.classList.add('on'); $('bRodOther').classList.remove('hide'); $('bRodOther').value = b.rodmat; }
-  }
+  setChip('bRodChips', b.rodmat || '', 'bRodOther');
   $('bFrame').value = b.frame || '';
   $('bWidth').value = b.width || '';
   if(b.sprbore){
@@ -1044,8 +1144,11 @@ function resetBelt(){
   ['bAsset','bDesc','bCvLen','bFrame','bWidth','bLen','bSprDesc','bSprPn','bSprDrive','bSprIdle',
    'bFlHeight','bFlRows','bFlMm','bNotch','bSgHeight','bQc','bRodOther','bFlTypeOther',
    'bSgTypeOther','bIndentOther'].forEach(i => { if($(i)) $(i).value = ''; });
-  ['bRodOther','bFlTypeOther','bSgTypeOther','bIndentOther'].forEach(i => $(i).classList.add('hide'));
-  $('bRodChips').querySelectorAll('button').forEach(x => x.classList.remove('on'));
+  ['bRodOther','bMatOther','bColourOther','bFlTypeOther','bSgTypeOther','bIndentOther']
+    .forEach(i => { $(i).value = ''; $(i).classList.add('hide'); });
+  clearChip('bRodChips', 'bRodOther');
+  clearChip('bMatChips', 'bMatOther');
+  clearChip('bColourChips', 'bColourOther');
   bRetroVal = ''; document.querySelectorAll('#bRetro button').forEach(x => x.classList.remove('on'));
   sprDescTouched = sprPnTouched = sprDriveTouched = sprIdleTouched = false;
   flMatTouched = lenTouched = false; indentAll = false;
@@ -1070,7 +1173,7 @@ $('bSave').addEventListener('click', async () => {
 
   const e = {
     type:'belt', asset:a, beltdesc:v('bDesc'),
-    series:serSel().value, style:stySel().value, beltmat:matSel().value, colour:colSel().value,
+    series:serSel().value, style:stySel().value, beltmat:beltMat(), colour:beltColour(),
     rodmat:rodValue(),
     clength:v('bCvLen'), frame:v('bFrame'), width:v('bWidth'), beltlen:v('bLen'),
     retrofit:bRetroVal,
@@ -1096,7 +1199,23 @@ $('bSave').addEventListener('click', async () => {
     qcontact:v('bQc'), photos:[]
   };
   call.entries.push(e);
-  await saveCall();
+  const ctxS = e.series, ctxT = e.series+'|'+e.style, ctxM = ctxT+'|'+e.beltmat;
+  bump('series', '', e.series);
+  bump('style', ctxS, e.style);
+  bump('material', ctxT, e.beltmat);
+  bump('colour', ctxM, e.colour);
+  bump('rod', '', e.rodmat);
+  if(!skipSpr){
+    bump('sprbore', ctxS, e.sprbore);
+    bump('sprpd', ctxS+'|'+e.sprbore, e.sprpd);
+    bump('sprmat', ctxS+'|'+e.sprbore+'|'+e.sprpd, e.sprmat);
+  }
+  if(!skipAcc){
+    bump('fltype', '', e.fstyle);   bump('flmat', '', e.flmat);
+    bump('sgtype', '', e.sgtype);   bump('sgmat', '', e.sgmat);
+    bump('indent', ctxT, e.findent);
+  }
+  await Promise.all([saveCall(), saveUse()]);
   toast('Belt '+a+' logged - add a photo if you want one');
   go('dash');
 });
@@ -1337,6 +1456,7 @@ function download(html){
     await openDB();
     DATA = await kvGet('data');
     REF = await kvGet('beltref');
+    await loadUse();
   } catch(e){ dbErr = e; console.error('storage', e); }
   renderDbStat(); renderRefStat(); renderHomeSetup(); fillManagers();
   $('cDate').value = todayISO();
