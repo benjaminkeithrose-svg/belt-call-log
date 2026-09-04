@@ -113,6 +113,22 @@ input.alert,select.alert{border-color:var(--danger);box-shadow:0 0 0 2px rgba(17
 .sec{margin-bottom:10px}
 .linkbtn{background:none;border:none;color:var(--link);font-size:13px;font-weight:700;
   font-family:var(--sans);padding:10px 2px;text-align:left;text-decoration:underline}
+
+/* --- manual page viewer --- */
+.mview{position:fixed;inset:0;z-index:50;background:#fff;flex-direction:column;display:none}
+.mview.on{display:flex}
+.mview .mvtop{display:flex;align-items:center;gap:11px;padding:9px 14px;border-bottom:3px solid var(--red);flex:none}
+.mview .mvtop h1{font-size:14px;margin:0;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mview .mvbody{flex:1;overflow:auto;background:var(--surf);display:flex;justify-content:center;
+  align-items:flex-start;padding:10px;-webkit-overflow-scrolling:touch}
+.mview .mvbody img{max-width:100%;height:auto;background:#fff;border:1px solid var(--line2)}
+.mview .mvnav{flex:none;display:flex;gap:9px;background:var(--footer);border-top:3px solid var(--red);
+  padding:9px 12px calc(10px + max(20px, env(safe-area-inset-bottom)))}
+.mview .mvnav button{flex:1;padding:12px 2px;border-radius:4px;border:1px solid #5a5c5e;
+  background:transparent;color:#fff;font-size:13px;font-family:var(--sans)}
+.mview .mvnav button.pri{background:#fff;color:var(--footer);border-color:#fff;font-weight:700}
+.mview .mvnav button:disabled{opacity:.4}
+#mSerChips button{min-width:64px;justify-content:center}
 </style>
 </head>
 <body>
@@ -138,6 +154,7 @@ input.alert,select.alert{border-color:var(--danger);box-shadow:0 0 0 2px rgba(17
   <p class="msg" id="homeSetup"></p>
   <h2>Past calls</h2>
   <div id="pastList"><p class="empty">No saved calls.</p></div>
+  <button class="linkbtn" data-go="manuals">Technical manuals</button>
   <button class="linkbtn" data-go="data">Data &amp; setup</button>
 </section>
 
@@ -159,6 +176,24 @@ input.alert,select.alert{border-color:var(--danger);box-shadow:0 0 0 2px rgba(17
     <button class="ghost" id="refBtn">Import plant audit workbook</button>
     <p class="hint">Plant_Audit_Template_1.xlsm. This is the bigger of the two files &mdash; the app will
       sit still for a few seconds while it reads. Leave the screen on until it says it is done.</p>
+  </div>
+  <h2>Engineering manuals</h2>
+  <div class="fld">
+    <p class="stat" id="manStat">No manuals loaded.</p>
+    <div class="gap"></div>
+    <label>Pages to keep as images</label>
+    <select id="manMode">
+      <option value="datasheets">Datasheet pages only &mdash; smallest</option>
+      <option value="series" selected>Whole series sections &mdash; recommended</option>
+      <option value="full">Every page &mdash; largest</option>
+    </select>
+    <input type="file" id="manFile" accept=".pdf,application/pdf" style="margin-top:10px">
+    <button class="ghost" id="manBtn">Import engineering manual</button>
+    <p class="msg" id="manMsg"></p>
+    <p class="hint">One manual at a time. Import the MPB manual, wait for it to finish, then the
+      ThermoDrive one. Each takes several minutes and needs the screen left on &mdash; every page is
+      read and turned into an image so it works with no reception afterwards.
+      The first import needs a connection once, to fetch the PDF reader.</p>
   </div>
 </section>
 
@@ -464,11 +499,37 @@ input.alert,select.alert{border-color:var(--danger);box-shadow:0 0 0 2px rgba(17
   <button class="big" id="hSave">Add fault</button>
 </section>
 
+<!-- MANUALS -->
+<section class="scr" id="s-manuals">
+  <div class="fld">
+    <label>Search</label>
+    <input type="search" id="mQ" placeholder="Series, style or any term" autocomplete="off">
+    <p class="hint" id="mHint"></p>
+  </div>
+  <div class="seg" id="mSeg">
+    <button type="button" data-seg="search" class="on">Search</button>
+    <button type="button" data-seg="browse">Browse series</button>
+  </div>
+  <p class="msg" id="mMsg"></p>
+  <div id="mBody"></div>
+  <div class="fld" id="mSelBar" style="display:none">
+    <p class="stat" id="mSelN"></p>
+    <button class="big" id="mShare">Share selected pages</button>
+    <button class="ghost" id="mClear">Clear selection</button>
+  </div>
+</section>
+
 <!-- COMPILE -->
 <section class="scr" id="s-compile">
   <h2>Output</h2>
   <div class="fld">
     <p class="stat" id="compStat"></p>
+  </div>
+  <h2>Customer documentation</h2>
+  <div class="fld">
+    <label class="chk"><input type="checkbox" id="optSpec" checked disabled> Belt specification</label>
+    <label class="chk"><input type="checkbox" id="optDatasheet"> Include technical data sheet</label>
+    <p class="msg" id="dsMsg"></p>
   </div>
   <button class="big" id="doShare">Generate and share</button>
   <button class="ghost" id="doDownload">Download instead</button>
@@ -485,9 +546,26 @@ input.alert,select.alert{border-color:var(--danger);box-shadow:0 0 0 2px rgba(17
 
 <input type="file" id="camInput" accept="image/*" capture="environment" multiple style="display:none">
 <input type="file" id="galInput" accept="image/*" multiple style="display:none">
+<div class="mview" id="mview">
+  <div class="mvtop">
+    <button class="back" id="mvClose">&#8249;</button>
+    <div class="hdt">
+      <h1 id="mvTtl"></h1>
+      <div class="sub" id="mvSub"></div>
+    </div>
+  </div>
+  <div class="mvbody"><img id="mvImg" alt=""></div>
+  <div class="mvnav">
+    <button type="button" id="mvPrev">Previous</button>
+    <button type="button" id="mvShare" class="pri">Share page</button>
+    <button type="button" id="mvNext">Next</button>
+  </div>
+</div>
+
 <div class="toast" id="toast"></div>
 
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<script src="manuals.js"></script>
 <script src="app.js"></script>
 </body>
 </html>
