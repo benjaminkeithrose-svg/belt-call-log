@@ -718,13 +718,8 @@ function populateSel(el, values, placeholder, withOther, field, ctx){
   const opt = v => '<option value="'+esc(v)+'">'+esc(v)+'</option>';
   const tail = withOther ? '<option value="OTHER">Other...</option>' : '';
   const head = '<option value="">'+esc(placeholder)+'</option>';
-  if(!field){ el.innerHTML = head + uniqSort(values).map(opt).join('') + tail; return; }
-  const r = rank(values, field, ctx);
-  /* split rather than silently reorder, so nothing looks like it has gone missing */
-  el.innerHTML = head +
-    (r.top.length ? '<optgroup label="Most used">'+r.top.map(opt).join('')+'</optgroup>' : '') +
-    (r.rest.length ? (r.top.length ? '<optgroup label="All">'+r.rest.map(opt).join('')+'</optgroup>'
-                                   : r.rest.map(opt).join('')) : '') + tail;
+  const list = field ? rank(values, field, ctx).all : uniqSort(values);
+  el.innerHTML = head + list.map(opt).join('') + tail;
 }
 function keepValue(el, prev){
   if(prev && [...el.options].some(o => o.value === prev)) el.value = prev;
@@ -1026,12 +1021,10 @@ function populateIndent(){
   }
   const use = shown.length ? shown : groups;
   const opt = v => '<option value="'+esc(v)+'">'+esc(v)+'</option>';
-  const pool = use.reduce((a, g) => a.concat(g[1]), []);
-  const top = rank(pool, 'indent', serSel().value+'|'+stySel().value).top;
+  const ctx = serSel().value+'|'+stySel().value;
   sel.innerHTML = '<option value="">Select indent...</option>' +
-    (top.length ? '<optgroup label="Most used">'+top.map(opt).join('')+'</optgroup>' : '') +
     use.map(([l, vals]) => '<optgroup label="'+esc(l)+'">' +
-      vals.map(opt).join('') + '</optgroup>').join('') +
+      rank(vals, 'indent', ctx).all.map(opt).join('') + '</optgroup>').join('') +
     '<option value="OTHER">Other...</option>';
   keepValue(sel, prev);
   $('bIndentOther').classList.toggle('hide', sel.value !== 'OTHER');
@@ -1103,6 +1096,16 @@ $('bFlMm').addEventListener('input', () => {
 function toggleSkip(box, bodyId){
   $(bodyId).classList.toggle('hide', box.checked);
 }
+const HD_RETAINER_QTY = 8;
+const SPACER_NOTE = 'Yes - see TSG for specification';
+function updateSprExtras(){
+  const bits = [];
+  if($('bSprSpacers').checked) bits.push('Spacers will be recorded as "'+SPACER_NOTE+'".');
+  if($('bSprHdRet').checked) bits.push('Heavy duty retainers will be recorded with a quantity of '+HD_RETAINER_QTY+'.');
+  $('bSprExtraNote').innerHTML = bits.join(' ');
+}
+$('bSprSpacers').addEventListener('change', updateSprExtras);
+$('bSprHdRet').addEventListener('change', updateSprExtras);
 $('bSkipSpr').addEventListener('change', e => toggleSkip(e.target, 'bSprBody'));
 $('bSkipAcc').addEventListener('change', e => toggleSkip(e.target, 'bAccBody'));
 
@@ -1155,6 +1158,7 @@ function resetBelt(){
   ['bSprDescAuto','bSprPnAuto','bSprDrvAuto','bSprIdlAuto','bFlMatAuto','bLenAuto']
     .forEach(i => $(i).classList.remove('off'));
   $('bSkipSpr').checked = false; $('bSprBody').classList.remove('hide');
+  $('bSprSpacers').checked = false; $('bSprHdRet').checked = false; updateSprExtras();
   $('bSkipAcc').checked = true;  $('bAccBody').classList.add('hide');
   $('bFlType').value = ''; $('bFlMat').value = ''; $('bSgType').value = ''; $('bSgMat').value = '';
   $('bErr').classList.remove('show');
@@ -1185,6 +1189,9 @@ $('bSave').addEventListener('click', async () => {
     sprpn:   skipSpr ? '' : v('bSprPn'),
     sprdrive:skipSpr ? '' : v('bSprDrive'),
     spridle: skipSpr ? '' : v('bSprIdle'),
+    sprspacers: !skipSpr && $('bSprSpacers').checked,
+    sprhdret:   !skipSpr && $('bSprHdRet').checked,
+    sprhdretqty:(!skipSpr && $('bSprHdRet').checked) ? String(HD_RETAINER_QTY) : '',
     flights: !skipAcc,
     fstyle:  skipAcc ? '' : flightType(),
     flmat:   skipAcc ? '' : $('bFlMat').value,
@@ -1380,7 +1387,9 @@ function buildNotesHTML(){
       ];
       const spr = [['Sprocket bore',b.sprbore],['Pitch diameter / teeth',b.sprpd],
         ['Sprocket material',b.sprmat],['Build type',b.sprvar],['Sprocket description',b.sprocket],
-        ['Part number',b.sprpn],['Drive qty',b.sprdrive],['Idle qty',b.spridle]];
+        ['Part number',b.sprpn],['Drive qty',b.sprdrive],['Idle qty',b.spridle],
+        ['Sprocket spacers', b.sprspacers ? SPACER_NOTE : ''],
+        ['Heavy duty retainers', b.sprhdret ? ('Yes - qty '+(b.sprhdretqty || HD_RETAINER_QTY)) : '']];
       const acc = [['Flight type',b.fstyle],['Flight material',b.flmat],['Flight height (mm)',b.fheight],
         ['Flight spacing (rows)',b.frows],['Flight spacing (mm)',b.fspacing],['Indent (mm)',b.findent],
         ['Centre notch (mm)',b.cnotch],['Sideguard type',b.sgtype],['Sideguard material',b.sgmat],

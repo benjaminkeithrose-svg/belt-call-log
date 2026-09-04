@@ -1,8 +1,9 @@
-const CACHE = 'beltcall-v10';
+const CACHE = 'beltcall-v11';
 
 // Local files first. If one of these fails the app still installs, but note the warning.
 const ASSETS = [
   './', './index.html', './app.js', './manifest.webmanifest', './logo.png',
+  './icon192.png', './icon512.png', './iconmaskable512.png',
   'https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js'
 ];
 
